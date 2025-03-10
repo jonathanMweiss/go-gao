@@ -1,13 +1,9 @@
 # Gao Decoder for Reed-Solomon Codes in Go
 
 ## Overview
-This repository provides an implementation of the Gao decoder for Reed-Solomon error-correcting codes in Go. The Gao decoder is an efficient algebraic decoding algorithm that corrects errors and erasures in Reed-Solomon encoded messages without explicitly computing a syndrome.
+This repository implements Gao's decoder for Reed-Solomon error-correcting codes in Go. 
+The decoder can perform robust interpolation (fix corruptions), given a list of the original evaluation points.
 
-<!-- ## Features
-- **Efficient decoding** of Reed-Solomon codes using the Gao method.
-- **Support for customizable parameters**, including field size and error correction capability.
-- **Simple API** for encoding and decoding messages.
-- **Optimized for performance** using Go's native capabilities. -->
 
 ## Installation
 To use the Gao decoder in your Go project, install it using:
