@@ -64,7 +64,7 @@ func (f *PrimeField) GetRootOfUnity(n uint64) (Elem, error) {
 		return Elem{}, errNSTooSmall
 	}
 
-	if !isPowerOfTwo(n) {
+	if !IsPowerOfTwo(n) {
 		return Elem{}, errNotPowerOfTwo
 	}
 
@@ -88,7 +88,7 @@ func (f *PrimeField) ElemSlice(vals []uint64) []Elem {
 	return elems
 }
 
-func isPowerOfTwo(n uint64) bool {
+func IsPowerOfTwo(n uint64) bool {
 	// https://graphics.stanford.edu/~seander/bithacks.html#DetermineIfPowerOf2
 	return n != 0 && (n&(n-1)) == 0
 }
