@@ -76,25 +76,12 @@ func NewCodeParameters(e EvaluationMap, n, k int) (CodeParams, error) {
 func NewCodeGao(c CodeParams) *Code {
 	fld := c.EvaluationMap.PrimeField()
 
-	xs := c.EvaluationMap.EvaluationPoints(c.N())
-
 	// create g0(x) = (x - x_1)(x - x_2)...(x - x_n)
 	// TODO: for FastEvaluationMaps, we can skip this step, and create g0 without computing it.
 
-	polys := make([]*field.Polynomial, c.N())
-
-	for i, x := range xs {
-		// create m_i(x) = (x - x_i)
-		coeffs := make([]field.Elem, 2)
-		coeffs[1] = fld.ElemFromUint64(1)
-		coeffs[0] = fld.ElemFromUint64(x).Neg()
-
-		polys[i] = field.NewPolynomial(coeffs, false)
-	}
-
 	return &Code{
 		CodeParams:   c,
-		g0:           fld.PolyProduct(polys),
+		g0:           c.EvaluationMap.GenerateLocatorPolynomial(c.N()),
 		interpolator: field.NewInterpolator(fld),
 		stopDegree:   (c.N() + c.K()) / 2,
 	}

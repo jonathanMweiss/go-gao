@@ -16,6 +16,11 @@ type EvaluationMap interface {
 	// returns the evaluation points for a polynomial of degree n
 	EvaluationPoints(n int) (xs []uint64)
 	EvaluatePolynomial(p *field.Polynomial) (ys []uint64, err error)
+
+	// The locator polynomial for the evaluation points.
+	// Namely, given the evaluation points x_1, ..., x_n, the locator polynomial is
+	// L(x) = (x - x_1)(x - x_2)...(x - x_n)
+	GenerateLocatorPolynomial(n int) *field.Polynomial
 }
 
 // can be fast, can be slow.
@@ -52,6 +57,7 @@ func (e *evaluationCache) loadPoints(n int) []uint64 {
 
 	return nil
 }
+
 func NewSlowEvaluator(field *field.PrimeField) *SlowEvaluator {
 	return &SlowEvaluator{
 		field: field,
@@ -101,4 +107,20 @@ func (e *SlowEvaluator) EvaluatePolynomial(p *field.Polynomial) ([]uint64, error
 	}
 
 	return values, nil
+}
+
+func (e *SlowEvaluator) GenerateLocatorPolynomial(n int) *field.Polynomial {
+	xs := e.EvaluationPoints(n)
+	polys := make([]*field.Polynomial, n)
+
+	for i, x := range xs {
+		// create m_i(x) = (x - x_i)
+		coeffs := make([]field.Elem, 2)
+		coeffs[1] = e.field.ElemFromUint64(1)
+		coeffs[0] = e.field.ElemFromUint64(x).Neg()
+
+		polys[i] = field.NewPolynomial(coeffs, false)
+	}
+
+	return e.field.PolyProduct(polys)
 }
