@@ -87,6 +87,15 @@ func NewCodeGao(c CodeParams) *Code {
 	}
 }
 
+func (gao *Code) Copy() *Code {
+	return &Code{
+		CodeParams:   gao.CodeParams,
+		g0:           gao.g0.Copy(),
+		interpolator: field.NewInterpolator(gao.PrimeField()),
+		stopDegree:   gao.stopDegree,
+	}
+}
+
 var ErrDataTooLarge = errors.New("data too large")
 var ErrDataElementsTooLarge = errors.New("data elements too large")
 
@@ -98,8 +107,8 @@ func (gao *Code) Encode(data []uint64) (map[uint64]uint64, error) {
 		if d >= q {
 			return nil, ErrDataElementsTooLarge
 		}
-
 	}
+
 	// check data length.
 	if len(data) > gao.K() {
 		return nil, ErrDataTooLarge

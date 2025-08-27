@@ -21,6 +21,8 @@ type EvaluationMap interface {
 	// Namely, given the evaluation points x_1, ..., x_n, the locator polynomial is
 	// L(x) = (x - x_1)(x - x_2)...(x - x_n)
 	GenerateLocatorPolynomial(n int) *field.Polynomial
+
+	isNTT() bool
 }
 
 // can be fast, can be slow.
@@ -123,4 +125,9 @@ func (e *SlowEvaluator) GenerateLocatorPolynomial(n int) *field.Polynomial {
 	}
 
 	return e.field.PolyProduct(polys)
+}
+
+// does not support fast Gao.
+func (e *SlowEvaluator) isNTT() bool {
+	return false
 }
