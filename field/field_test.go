@@ -172,3 +172,31 @@ func BenchmarkMulModBig(b *testing.B) {
 		b1.Mod(b1, f.asBigInt)
 	}
 }
+
+func FuzzSub_Simple(fz *testing.F) {
+	// Use a single, fixed 63-bit prime (2^61 - 1, a known Mersenne prime).
+	const p = uint64(157)
+
+	pf, err := NewPrimeField(p)
+	if err != nil {
+		fz.Fatalf("failed to init PrimeField: %v", err)
+	}
+
+	// A couple of tiny seeds; the fuzzer will generate the rest.
+	fz.Add(uint64(0), uint64(0))
+	fz.Add(uint64(1), uint64(2))
+	fz.Add(p-1, p-1)
+
+	fz.Fuzz(func(t *testing.T, aSeed, bSeed uint64) {
+		// Reduce inputs into field domain
+		a := pf.ElemFromUint64(aSeed)
+		b := pf.ElemFromUint64(bSeed)
+
+		got := a.Sub(b).Value()
+		want := a.Add(b.Neg()).Value() // check via a + (-b)
+
+		if got != want {
+			t.Fatalf("Sub mismatch: got=%d, want=%d (a=%d, b=%d, p=%d)", got, want, a.Value(), b.Value(), p)
+		}
+	})
+}

@@ -3,9 +3,9 @@ package field
 import (
 	"errors"
 	"math/big"
+	"math/bits"
 
 	"github.com/tuneinsight/lattigo/v6/ring"
-	bigint "lukechampine.com/uint128"
 )
 
 type PrimeField struct {
@@ -68,7 +68,7 @@ func (f *PrimeField) GetRootOfUnity(n uint64) (Elem, error) {
 		return Elem{}, errNotPowerOfTwo
 	}
 
-	if bigint.From64(f.prime-1).Mod64(n) != 0 {
+	if (f.prime-1)%n != 0 {
 		return Elem{}, errNotDivisible
 	}
 
@@ -125,7 +125,7 @@ func (f *PrimeField) ElemFromUint64(val uint64) Elem {
 }
 
 func (e Elem) Value() uint64 {
-	return e.value % e.field.prime
+	return e.value
 }
 
 func (e Elem) Copy() Elem {
@@ -139,49 +139,65 @@ func (e Elem) IsZero() bool {
 	return e.value == 0
 }
 
-func (e Elem) Add(b Elem) Elem {
-	if e.IsZero() {
-		return b // empty elem is 0.
-	}
-
-	if e.field.prime != b.field.prime {
-		panic("prime mismatch")
-	}
-
-	return e.field.ElemFromUint64(e.value + b.value)
+func (e Elem) isOne() bool {
+	return e.value == 1
 }
 
+func (e Elem) Add(b Elem) Elem {
+	if e.IsZero() {
+		// used for Elem{}, or Elem{0,nilField}.
+		return b
+	}
+
+	tmp := e.value + b.value // can't overflow since adding two integers smaller than 2^63.
+	if tmp >= e.field.prime {
+		tmp -= e.field.prime
+	}
+
+	return Elem{e.field, tmp}
+}
+
+// Mul returns e * b (mod field prime).
 func (e Elem) Mul(b Elem) Elem {
-	if e.IsZero() || b.IsZero() {
-		return Elem{b.field, 0} // empty elem is 0
+	// Early outs (identity/annihilator).
+	switch {
+	case e.IsZero() || b.IsZero():
+		return Elem{e.field, 0}
+	case e.isOne():
+		return b
+	case b.isOne():
+		return e
 	}
 
-	if e.field.prime != b.field.prime {
-		panic("prime mismatch")
-	}
+	// 128-bit product, then reduce: (hi:lo) mod p.
+	return Elem{e.field, fieldMul(e.value, b.value, e.field.prime)}
+}
 
-	n := bigint.From64(e.value).Mul64(b.value)
+func fieldMul(a, b uint64, prime uint64) uint64 {
+	hi, lo := bits.Mul64(a, b)
+	_, rem := bits.Div64(hi, lo, prime)
 
-	return e.field.ElemFromUint64(n.Mod64(e.field.prime))
+	return rem
 }
 
 // https://en.wikipedia.org/wiki/Exponentiation_by_squaring
 func (e Elem) Pow(exp uint64) Elem {
-	mod := bigint.From64(e.field.prime)
-	base := bigint.From64(e.value % e.field.prime)
+	mod := e.field.prime
+	base := uint64(e.value)
 
-	x := bigint.From64(1)
+	x := uint64(1)
 
 	for exp > 0 {
 		if exp%2 == 1 { // If exponent is odd, multiply base with x
-			x = x.Mul(base).Mod(mod)
+			x = fieldMul(x, base, mod)
+			// x = x.Mul(base).Mod(mod)
 		}
 
-		base = base.Mul(base).Mod(mod) // Square the base
-		exp /= 2                       // Halve the exponent
+		base = fieldMul(base, base, mod) // Square the base
+		exp /= 2                         // Halve the exponent
 	}
 
-	return e.field.ElemFromUint64(x.Mod64(e.field.prime))
+	return Elem{e.field, x % mod}
 }
 
 func (e Elem) Inverse() Elem {
@@ -201,7 +217,11 @@ func (e Elem) Neg() Elem {
 }
 
 func (e Elem) Sub(b Elem) Elem {
-	return e.Add(b.Neg())
+	if e.value < b.value {
+		return Elem{e.field, e.field.prime - (b.value - e.value)}
+	}
+
+	return Elem{e.field, e.value - b.value}
 }
 
 func (e Elem) Equals(o Elem) bool {
