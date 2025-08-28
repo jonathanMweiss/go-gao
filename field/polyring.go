@@ -22,8 +22,8 @@ type PolyRing interface {
 	PartialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial)
 
 	// Assumes it is a polynomial of a valid degree.
-	NTT(a *Polynomial) *Polynomial
-	INTT(a *Polynomial) *Polynomial
+	NttForward(a *Polynomial) (*Polynomial, error)
+	NttBackward(a *Polynomial) (*Polynomial, error)
 }
 
 // DensePolyRing implements PolyRing with optional NTT domain for polynomials.
@@ -277,24 +277,49 @@ func makeConstantPoly(f Field, u uint64) *Polynomial {
 
 // returns r= gcd(a,b), x, y such that ax + by = r.
 // where r.Degree() < stopDegree.
+//
+// improved from recursive function using gpt:
 func (r *DensePolyRing) PartialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial) {
-	if a.Degree() < stopDegree {
-		gcd = a.Copy()
-		x = makeConstantPoly(r.Field, 1)
-		y = makeConstantPoly(r.Field, 0)
+	// Work on local copies ensuring inputs aren't mutated.
+	A := a.Copy()
+	B := b.Copy()
 
-		return
+	// Invariants:
+	//   A = x0*a_orig + y0*b_orig
+	//   B = x1*a_orig + y1*b_orig
+	x0 := makeConstantPoly(r.Field, 1) // 1
+	x1 := makeConstantPoly(r.Field, 0) // 0
+	y0 := makeConstantPoly(r.Field, 0) // 0
+	y1 := makeConstantPoly(r.Field, 1) // 1
+
+	// Reusable temporaries (avoid allocations).
+	tmp1 := &Polynomial{f: r.Field} // holds q*x1 or q*y1
+	tmp2 := &Polynomial{f: r.Field} // holds x0 - q*x1 or y0 - q*y1
+
+	for A.Degree() >= stopDegree {
+		// If B == 0, can't divide further.
+		if B.Degree() < 0 {
+			break
+		}
+
+		// A = q*B + r
+		q, rrem := r.LongDiv(A, B)
+		A, B = B, rrem // GCD recursive step: gcd(A, B) = gcd(B,rrem)
+
+		// following Bézout's identity:
+		// x update: (x0, x1) = (x1, x0 - q*x1)
+		r.MulPoly(q, x1, tmp1)    // tmp1 = q * x1
+		r.SubPoly(x0, tmp1, tmp2) // tmp2 = x0 - q*x1
+		x0, x1, tmp2 = x1, tmp2, x0
+
+		// y update: (y0, y1) = (y1, y0 - q*y1)
+		r.MulPoly(q, y1, tmp1)    // tmp1 = q * y1
+		r.SubPoly(y0, tmp1, tmp2) // tmp2 = y0 - q*y1
+		y0, y1, tmp2 = y1, tmp2, y0
 	}
 
-	quotient, rem := r.LongDiv(a, b)
-	gcd, x1, y1 := r.PartialExtendedEuclidean(b, rem, stopDegree)
-	x = y1.Copy()
-	y = y1
-
-	r.MulPoly(quotient, y1, y)
-	r.SubPoly(x1, y, y)
-
-	return gcd, x, y
+	// gcd = A, x = x0, y = y0
+	return A, x0, y0
 }
 
 // PolyProductMonicNegRoots computes \prod (x - r_i).
