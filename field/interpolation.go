@@ -3,11 +3,11 @@ package field
 import "errors"
 
 type Interpolator struct {
-	Field Field
+	pr PolyRing
 }
 
-func NewInterpolator(field Field) *Interpolator {
-	return &Interpolator{Field: field}
+func NewInterpolator(pr PolyRing) *Interpolator {
+	return &Interpolator{pr: pr}
 }
 
 var (
@@ -32,43 +32,46 @@ func (intr *Interpolator) Interpolate(xs, ys []uint64) (*Polynomial, error) {
 	miSlice := intr.createMiSlice(xs)
 
 	// O(n^2) total cost, since we are multiplying n polynomials of degree 1.
-	m := PolyProduct(intr.Field, miSlice)
+	m := PolyProduct(intr.pr, miSlice)
 
-	liSlice := make([]*Polynomial, len(xs))
+	liSlice := make([]Polynomial, len(xs))
 
-	f := intr.Field
+	pr := intr.pr
+	f := pr.GetField()
 	for i, mi := range miSlice {
 		qi := intr.mDivMi(m, mi) // O(n) fast division.
-		s := qi.Eval(xs[i])
+		s := pr.Evaluate(qi, xs[i])
 
 		// this will be the denominator inside the product: \prod_{0\le j \le n, j\ne i} (x_i - u_j)/ (u_i-u_j)
 		sinv := f.Inverse(s)
 
 		// O(n):
-		liSlice[i] = qi.MulScalarInPlace(sinv) // l_i(x)
+		pr.MulScalar(qi, sinv, &liSlice[i])
+		// liSlice[i] = qi.MulScalarInPlace(sinv) // l_i(x)
 	}
 
 	for i, li := range liSlice {
-		li.MulScalarInPlace(intr.Field.Reduce(ys[i]))
+		pr.MulScalar(&li, ys[i], &li)
+		// li.MulScalarInPlace(intr.pr.Reduce(ys[i]))
 	}
 
 	return intr.similarDegreePolySum(liSlice), nil
 }
 
 // PolyProduct multiplies a slice of polynomials.
-func PolyProduct(f Field, miSlice []*Polynomial) *Polynomial {
-	m := makeConstantPoly(f, 1)
+func PolyProduct(pr PolyRing, miSlice []*Polynomial) *Polynomial {
+	m := makeConstantPoly(pr.GetField(), 1)
 	for _, mi := range miSlice {
-		m = m.Mul(mi)
+		pr.MulPoly(m, mi, m)
 	}
 
 	return m
 }
 
 // similarDegreePolySum sums polynomials of the same degree.
-func (intr *Interpolator) similarDegreePolySum(polys []*Polynomial) *Polynomial {
+func (intr *Interpolator) similarDegreePolySum(polys []Polynomial) *Polynomial {
 	inner := make([]uint64, len(polys[0].inner))
-	fld := intr.Field
+	fld := intr.pr.GetField()
 	for _, poly := range polys {
 		for i, coef := range poly.inner {
 			inner[i] = fld.Add(inner[i], coef)
@@ -82,7 +85,7 @@ func (intr *Interpolator) similarDegreePolySum(polys []*Polynomial) *Polynomial 
 // createMiSlice creates the m_i(x) = (x - x_i) polynomials.
 func (intr *Interpolator) createMiSlice(xs []uint64) []*Polynomial {
 	miSlice := make([]*Polynomial, len(xs))
-	f := intr.Field
+	f := intr.pr.GetField()
 	for i, x := range xs {
 		miInner := make([]uint64, 2)
 
@@ -104,7 +107,7 @@ func (intr *Interpolator) mDivMi(m_, mi_ *Polynomial) *Polynomial {
 	qinner := make([]uint64, len(m.inner)-1)
 	ui := mi_.inner[0]
 
-	f := intr.Field
+	f := intr.pr.GetField()
 	tmp := uint64(0)
 
 	for i := len(m.inner) - 1; i > 0; i-- {

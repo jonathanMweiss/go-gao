@@ -26,41 +26,112 @@ func TestPolyAdd(t *testing.T) {
 	f, err := NewPrimeField(157)
 	a.NoError(err)
 
-	t.Run("sameSize", func(t *testing.T) {
-		slice := []uint64{1, 2, 0, 3}
+	pr := NewDensePolyRing(f)
+	t.Run("NotInPlace", func(t *testing.T) {
 
-		p1 := NewPolynomial(f, slice, false)
-		p2 := NewPolynomial(f, slice, false)
+		t.Run("sameSize", func(t *testing.T) {
+			slice := []uint64{1, 2, 0, 3}
 
-		sum := p1.Add(p2)
+			p1 := NewPolynomial(f, slice, false)
+			p2 := NewPolynomial(f, slice, false)
+			sum := &Polynomial{f: f}
 
-		a.Equal([]uint64{2, 4, 0, 6}, sum.ToSlice())
+			pr.AddPoly(p1, p2, sum)
+			a.Equal([]uint64{2, 4, 0, 6}, sum.ToSlice())
+		})
+
+		t.Run("differentSizes", func(t *testing.T) {
+			slice := []uint64{1, 2, 0, 3}
+			slice2 := []uint64{1, 2, 0}
+
+			p1 := NewPolynomial(f, slice, false)
+			p2 := NewPolynomial(f, slice2, false)
+			sum, sum2 := &Polynomial{f: f}, &Polynomial{f: f}
+
+			pr.AddPoly(p1, p2, sum)
+			pr.AddPoly(p2, p1, sum2)
+
+			a.Equal([]uint64{2, 4, 0, 3}, sum.ToSlice())
+			a.Equal([]uint64{2, 4, 0, 3}, sum2.ToSlice())
+		})
+
+		t.Run("WrapAroundElems", func(t *testing.T) {
+			q := f.Modulus() - 1
+
+			slice := []uint64{q, q, q, q}
+
+			p1 := NewPolynomial(f, slice, false)
+			p2 := NewPolynomial(f, []uint64{1, 1, 1, 1}, false)
+			sum := &Polynomial{f: f}
+			pr.AddPoly(p1, p2, sum)
+			a.True(sum.IsZero())
+		})
 	})
 
-	t.Run("differentSizes", func(t *testing.T) {
-		slice := []uint64{1, 2, 0, 3}
-		slice2 := []uint64{1, 2, 0}
+	t.Run("InPlace", func(t *testing.T) {
 
-		p1 := NewPolynomial(f, slice, false)
-		p2 := NewPolynomial(f, slice2, false)
+		t.Run("sameSize", func(t *testing.T) {
+			slice := []uint64{1, 2, 0, 3}
 
-		sum := p1.Add(p2)
-		sum2 := p2.Add(p1)
-		a.Equal([]uint64{2, 4, 0, 3}, sum.ToSlice())
-		a.Equal([]uint64{2, 4, 0, 3}, sum2.ToSlice())
+			p1 := NewPolynomial(f, slice, false)
+			p2 := NewPolynomial(f, slice, false)
+
+			p1cpy := p1.Copy()
+			p2cpy := p2.Copy()
+			pr.AddPoly(p1, p2, p1)
+			a.Equal([]uint64{2, 4, 0, 6}, p1.ToSlice())
+
+			p1 = p1cpy.Copy()
+			p2 = p2cpy.Copy()
+
+			pr.AddPoly(p1, p2, p2)
+			a.Equal([]uint64{2, 4, 0, 6}, p2.ToSlice())
+		})
+
+		t.Run("differentSizes", func(t *testing.T) {
+			slice := []uint64{1, 2, 0, 3}
+			slice2 := []uint64{1, 2, 0}
+
+			p1 := NewPolynomial(f, slice, false)
+			p2 := NewPolynomial(f, slice2, false)
+			p1cpy, p2cpy := p1.Copy(), p2.Copy()
+			reset := func() { p1, p2 = p1cpy.Copy(), p2cpy.Copy() }
+
+			pr.AddPoly(p1, p2, p1)
+			a.Equal([]uint64{2, 4, 0, 3}, p1.ToSlice())
+			reset()
+
+			pr.AddPoly(p2, p1, p1)
+			a.Equal([]uint64{2, 4, 0, 3}, p1.ToSlice())
+			reset()
+
+			// Now the other side:
+			pr.AddPoly(p1, p2, p2)
+			a.Equal([]uint64{2, 4, 0, 3}, p2.ToSlice())
+			reset()
+
+			pr.AddPoly(p2, p1, p2)
+			a.Equal([]uint64{2, 4, 0, 3}, p2.ToSlice())
+			reset()
+		})
+
+		t.Run("WrapAroundElems", func(t *testing.T) {
+			q := f.Modulus() - 1
+
+			slice := []uint64{q, q, q, q}
+
+			p1 := NewPolynomial(f, slice, false)
+			p2 := NewPolynomial(f, []uint64{1, 1, 1, 1}, false)
+			cpy := p1.Copy()
+			pr.AddPoly(cpy, p2, cpy)
+			a.True(cpy.IsZero())
+
+			cpy = p2.Copy()
+			pr.AddPoly(cpy, p1, cpy)
+			a.True(cpy.IsZero())
+		})
 	})
 
-	t.Run("WrapAroundElems", func(t *testing.T) {
-		q := f.Modulus() - 1
-
-		slice := []uint64{q, q, q, q}
-
-		p1 := NewPolynomial(f, slice, false)
-		p2 := NewPolynomial(f, []uint64{1, 1, 1, 1}, false)
-
-		sum := p1.Add(p2)
-		a.True(sum.IsZero())
-	})
 }
 
 func TestPolySub(t *testing.T) {
@@ -69,15 +140,23 @@ func TestPolySub(t *testing.T) {
 	f, err := NewPrimeField(157)
 	a.NoError(err)
 
+	pr := NewDensePolyRing(f)
+
 	t.Run("sameSize", func(t *testing.T) {
 		slice := []uint64{1, 2, 0, 3}
 
 		p1 := NewPolynomial(f, slice, false)
 		p2 := NewPolynomial(f, slice, false)
+		p1cpy, p2cpy := p1.Copy(), p2.Copy()
+		reset := func() { p1, p2 = p1cpy.Copy(), p2cpy.Copy() }
 
-		sum := p1.Sub(p2)
+		pr.SubPoly(p1, p2, p1)
+		a.True(p1.IsZero())
+		reset()
 
-		a.Equal([]uint64{0}, sum.ToSlice())
+		pr.SubPoly(p1, p2, p2)
+		a.True(p2.IsZero())
+		reset()
 	})
 
 	t.Run("differentSizes", func(t *testing.T) {
@@ -86,13 +165,25 @@ func TestPolySub(t *testing.T) {
 
 		p1 := NewPolynomial(f, slice, false)
 		p2 := NewPolynomial(f, slice2, false)
+		p1cpy, p2cpy := p1.Copy(), p2.Copy()
+		reset := func() { p1, p2 = p1cpy.Copy(), p2cpy.Copy() }
 
-		sum := p1.Sub(p2)
-		a.Equal([]uint64{0, 0, 0, 3}, sum.ToSlice())
+		pr.SubPoly(p1, p2, p1)
+		a.Equal([]uint64{0, 0, 0, 3}, p1.ToSlice())
+		reset()
 
-		sum2 := p2.Sub(p1)
-		a.Equal([]uint64{0, 0, 0, 154}, sum2.ToSlice())
+		pr.SubPoly(p1, p2, p2)
+		a.Equal([]uint64{0, 0, 0, 3}, p2.ToSlice())
+		reset()
+
+		pr.SubPoly(p2, p1, p1)
+		a.Equal([]uint64{0, 0, 0, 154}, p1.ToSlice())
+		reset()
+
+		pr.SubPoly(p2, p1, p2)
+		a.Equal([]uint64{0, 0, 0, 154}, p2.ToSlice())
 	})
+
 }
 
 func TestPolyMul(t *testing.T) {
@@ -101,15 +192,16 @@ func TestPolyMul(t *testing.T) {
 	f, err := NewPrimeField(5)
 	a.NoError(err)
 
+	pr := NewDensePolyRing(f)
 	t.Run("sameSize", func(t *testing.T) {
 		slice := []uint64{1, 2, 3}
 
 		p1 := NewPolynomial(f, slice, false)
 		p2 := NewPolynomial(f, slice, false)
 
-		prod := p1.Mul(p2)
+		pr.MulPoly(p1, p2, p1)
 
-		a.Equal([]uint64{1, 4, 0, 2, 4}, prod.ToSlice())
+		a.Equal([]uint64{1, 4, 0, 2, 4}, p1.ToSlice())
 	})
 
 	t.Run("differentSizes", func(t *testing.T) {
@@ -118,22 +210,22 @@ func TestPolyMul(t *testing.T) {
 
 		p1 := NewPolynomial(f, slice, false)
 		p2 := NewPolynomial(f, slice2, false)
+		p1cpy, p2cpy := p1.Copy(), p2.Copy()
 
-		prod := p1.Mul(p2)
-		prod2 := p2.Mul(p1)
-		a.Equal([]uint64{1, 4, 4, 3, 1}, prod.ToSlice())
-		a.True(prod.Equals(prod2))
+		pr.MulPoly(p1, p2, p1)
+		pr.MulPoly(p2cpy, p1cpy, p2)
+		a.Equal([]uint64{1, 4, 4, 3, 1}, p1.ToSlice())
+		a.True(p1.Equals(p2))
 	})
 
-	t.Run("coeffmod", func(t *testing.T) {
+	t.Run("inNTT", func(t *testing.T) {
 		slice := []uint64{1, 2, 3}
 
 		p1 := NewPolynomial(f, slice, true)
 		p2 := NewPolynomial(f, slice, true)
 
-		prod := p1.Mul(p2)
-
-		a.Equal([]uint64{1, 4, 4}, prod.ToSlice())
+		pr.MulPoly(p1, p2, p1)
+		a.Equal([]uint64{1, 4, 4}, p1.ToSlice())
 	})
 }
 
@@ -143,36 +235,37 @@ func TestPolyLongDiv(t *testing.T) {
 	f, err := NewPrimeField(5)
 	a.NoError(err)
 
+	pr := NewDensePolyRing(f)
 	t.Run("simple", func(t *testing.T) {
 		p1 := NewPolynomial(f, []uint64{1, 2, 3}, false)
 		p2 := NewPolynomial(f, []uint64{1, 2, 3}, false)
 
-		quotient, remainder := p1.LongDiv(p2)
+		quotient, remainder := pr.LongDiv(p1, p2)
 		a.Equal([]uint64{1}, quotient.ToSlice())
-		a.Equal([]uint64{0}, remainder.ToSlice())
+		a.True(remainder.IsZero())
 
-		quotient, remainder = p2.LongDiv(p1)
+		quotient, remainder = pr.LongDiv(p2, p1)
 		a.Equal([]uint64{1}, quotient.ToSlice())
-		a.Equal([]uint64{0}, remainder.ToSlice())
+		a.True(remainder.IsZero())
 	})
 
 	t.Run("differentSizes", func(t *testing.T) {
 		p1 := NewPolynomial(f, []uint64{1, 2, 3}, false)
 		p2 := NewPolynomial(f, []uint64{1, 2}, false)
 
-		quotient, remainder := p1.LongDiv(p2)
+		quotient, remainder := pr.LongDiv(p1, p2)
 
 		a.Equal([]uint64{4, 4}, quotient.ToSlice())
 		a.Equal([]uint64{2}, remainder.ToSlice())
 
-		q, r := p2.LongDiv(p1)
+		q, r := pr.LongDiv(p2, p1)
 		a.True(p2.Equals(r))
 		a.True(q.IsZero())
 
 		p1 = NewPolynomial(f, []uint64{1, 2, 0, 0, 3}, false)
 		p2 = NewPolynomial(f, []uint64{1, 2}, false)
 
-		quotient, remainder = p1.LongDiv(p2)
+		quotient, remainder = pr.LongDiv(p1, p2)
 		a.Equal([]uint64{3, 1, 3, 4}, quotient.ToSlice())
 		a.Equal([]uint64{3}, remainder.ToSlice())
 	})
@@ -181,7 +274,7 @@ func TestPolyLongDiv(t *testing.T) {
 		p1 := NewPolynomial(f, []uint64{1, 0, 0, 0, 2, 3}, false)
 		p2 := NewPolynomial(f, []uint64{1, 0, 1, 0, 2}, false)
 
-		quotient, remainder := p1.LongDiv(p2)
+		quotient, remainder := pr.LongDiv(p1, p2)
 
 		a.Equal([]uint64{1, 4}, quotient.ToSlice())
 		a.Equal([]uint64{0, 1, 4, 1}, remainder.ToSlice())
@@ -194,6 +287,7 @@ func TestPolyEvaluation(t *testing.T) {
 	f, err := NewPrimeField(5)
 	a.NoError(err)
 
+	pr := NewDensePolyRing(f)
 	t.Run("simple", func(t *testing.T) {
 		slice := []uint64{1, 2, 3}
 
@@ -202,7 +296,7 @@ func TestPolyEvaluation(t *testing.T) {
 		// pairs of {x,p(x)}
 		test := [][2]uint64{{1, 1}, {2, 2}, {3, 4}, {4, 2}}
 		for _, tt := range test {
-			a.Equal(tt[1], p.Eval(tt[0]))
+			a.Equal(tt[1], pr.Evaluate(p, tt[0]))
 		}
 	})
 
@@ -214,7 +308,7 @@ func TestPolyEvaluation(t *testing.T) {
 		// pairs of {x,p(x)}
 		test := [][2]uint64{{1, 0}, {2, 0}, {3, 0}, {4, 0}}
 		for _, tt := range test {
-			a.Equal(tt[1], p.Eval(tt[0]))
+			a.Equal(tt[1], pr.Evaluate(p, tt[0]))
 		}
 	})
 }
@@ -231,6 +325,8 @@ func FuzzPEEA(f *testing.F) {
 		f.FailNow()
 	}
 
+	pr := NewDensePolyRing(fld)
+
 	f.Fuzz(func(t *testing.T, randomSeed uint64) {
 		// Create random polynomials.
 		maxDegree := 10
@@ -242,11 +338,12 @@ func FuzzPEEA(f *testing.F) {
 		for i := 1; i < maxDegree-1; i++ {
 			partialDegree := i
 
-			gcd, x, y := PartialExtendedEuclidean(a, b, partialDegree)
+			gcd, x, y := pr.PartialExtendedEuclidean(a, b, partialDegree)
 
-			ax := a.Mul(x)
-			by := b.Mul(y)
-			ax_plus_by := ax.Add(by)
+			ax, by, ax_plus_by := &Polynomial{}, &Polynomial{}, &Polynomial{}
+			pr.MulPoly(a, x, ax)
+			pr.MulPoly(b, y, by)
+			pr.AddPoly(ax, by, ax_plus_by)
 
 			if !ax_plus_by.Equals(gcd) {
 				t.Fatalf("expected %v, got %v", ax_plus_by, gcd)
@@ -269,13 +366,14 @@ func BenchmarkPolyDiv(b *testing.B) {
 	if err != nil {
 		b.FailNow()
 	}
+	pr := NewDensePolyRing(f)
 
 	p1 := randomPolynomial(f, largePrime/4, 8192)
 	p2 := randomPolynomial(f, largePrime/4, 8192/2)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		p1.LongDiv(p2)
+		pr.LongDiv(p1, p2)
 	}
 }
 
@@ -286,6 +384,8 @@ func BenchmarkPEEA(b *testing.B) {
 		b.FailNow()
 	}
 
+	pr := NewDensePolyRing(f)
+
 	polyMaxDegree := 8193
 	p1 := randomPolynomial(f, largePrime/4, polyMaxDegree)   // Large Polynomial.
 	p2 := randomPolynomial(f, largePrime/7, polyMaxDegree-1) // The degree of g0 in Gao's decoder, for a polynomial of degree p1.
@@ -295,7 +395,7 @@ func BenchmarkPEEA(b *testing.B) {
 			partialDegree := 1 << i
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				PartialExtendedEuclidean(p1, p2, partialDegree)
+				pr.PartialExtendedEuclidean(p1, p2, partialDegree)
 			}
 		})
 	}
@@ -310,7 +410,7 @@ func BenchmarkPEEA(b *testing.B) {
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				PartialExtendedEuclidean(p1, p2, (n+k)/2) // Gao's decoder partialEEA.
+				pr.PartialExtendedEuclidean(p1, p2, (n+k)/2) // Gao's decoder partialEEA.
 			}
 		})
 	}
@@ -331,12 +431,13 @@ func TestLocatorPolynomial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	pr := NewDensePolyRing(f)
 
 	p := PolyProductMonicNegRoots(f, roots)
 
-	intr := Interpolator{f}
+	intr := NewInterpolator(pr)
 
-	q := PolyProduct(f, intr.createMiSlice(roots))
+	q := PolyProduct(pr, intr.createMiSlice(roots))
 
 	if !p.Equals(q) {
 		t.FailNow()
@@ -379,4 +480,31 @@ func BenchmarkPolyProductMonicNegRoots(b *testing.B) {
 			benchPolySink = p
 		})
 	}
+}
+
+func TestMulNTT(t *testing.T) {
+	a := assert.New(t)
+	f, err := NewPrimeField(65537)
+	a.NoError(err)
+
+	slice := []uint64{1, 2, 3, 4}
+
+	p1 := NewPolynomial(f, slice, false)
+	p2 := p1.Copy()
+	p3 := Polynomial{}
+
+	pr := NewDensePolyRing(f)
+	pr.MulPoly(p1, p2, &p3)
+
+	PadForNTTWithFutureMults(p1)
+	PadForNTTWithFutureMults(p2)
+
+	p1ntt := pr.NTT(p1)
+	p2ntt := pr.NTT(p2)
+
+	p4 := p3.Copy()
+	pr.MulPoly(p1ntt, p2ntt, p4)
+
+	fmt.Println(&p3)
+	fmt.Println(pr.INTT(p4))
 }

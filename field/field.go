@@ -22,6 +22,7 @@ type Field interface {
 	Modulus() uint64
 	GetRootOfUnity(n uint64) (uint64, error)
 	Generator() uint64
+	Factors() []uint64
 }
 
 type PrimeField struct {
@@ -122,14 +123,6 @@ func (f *PrimeField) Generator() uint64 {
 
 func (f *PrimeField) Factors() []uint64 {
 	return f.factors
-}
-
-func (f *PrimeField) constantPolynomial(val uint64) *Polynomial {
-	return &Polynomial{
-		inner:            []uint64{f.Reduce(val)},
-		isCoefficientMod: false,
-		f:                f,
-	}
 }
 
 func (f *PrimeField) Reduce(val uint64) uint64 {

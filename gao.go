@@ -38,6 +38,7 @@ type CodeParams struct {
 
 type Code struct {
 	CodeParams
+	pr           field.PolyRing
 	interpolator *field.Interpolator
 	// g0 polynomial from the Gao code.
 	// with fast EvaluationMaps like NTT, this polynomial can be used to do fast division.
@@ -75,14 +76,15 @@ func NewCodeParameters(e EvaluationMap, n, k int) (CodeParams, error) {
 
 func NewCodeGao(c CodeParams) *Code {
 	fld := c.EvaluationMap.PrimeField()
-
+	pr := field.NewDensePolyRing(fld)
 	// create g0(x) = (x - x_1)(x - x_2)...(x - x_n)
 	// TODO: for FastEvaluationMaps, we can skip this step, and create g0 without computing it.
 
 	return &Code{
 		CodeParams:   c,
+		pr:           pr,
 		g0:           c.EvaluationMap.GenerateLocatorPolynomial(c.N()),
-		interpolator: field.NewInterpolator(fld),
+		interpolator: field.NewInterpolator(pr),
 		stopDegree:   (c.N() + c.K()) / 2,
 	}
 }
@@ -91,7 +93,7 @@ func (gao *Code) Copy() *Code {
 	return &Code{
 		CodeParams:   gao.CodeParams,
 		g0:           gao.g0.Copy(),
-		interpolator: field.NewInterpolator(gao.PrimeField()),
+		interpolator: field.NewInterpolator(gao.pr),
 		stopDegree:   gao.stopDegree,
 	}
 }
@@ -172,8 +174,9 @@ func (gao *Code) Decode(received map[uint64]uint64) ([]uint64, error) {
 		return nil, err
 	}
 
-	g, _, v := field.PartialExtendedEuclidean(gao.g0, g1, gao.stopDegree)
-	f, r := g.LongDiv(v)
+	pr := gao.pr
+	g, _, v := pr.PartialExtendedEuclidean(gao.g0, g1, gao.stopDegree)
+	f, r := pr.LongDiv(g, v)
 
 	if !r.IsZero() || f.Degree() > gao.K() {
 		return nil, ErrDecoding

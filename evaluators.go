@@ -46,7 +46,7 @@ func (e evaluationCache) storePoints(n int, points []uint64) {
 type SlowEvaluator struct {
 	cache *evaluationCache
 
-	f field.Field
+	pr field.PolyRing
 }
 
 func (e *evaluationCache) loadPoints(n int) []uint64 {
@@ -62,7 +62,7 @@ func (e *evaluationCache) loadPoints(n int) []uint64 {
 
 func NewSlowEvaluator(f field.Field) *SlowEvaluator {
 	return &SlowEvaluator{
-		f:     f,
+		pr:    field.NewDensePolyRing(f),
 		cache: newEvaluatorCache(),
 	}
 }
@@ -93,7 +93,7 @@ func (e *SlowEvaluator) EvaluationPoints(n int) []uint64 {
 var errNotInCoefficientForm = errors.New("polynomial not in coefficient form")
 
 func (e *SlowEvaluator) PrimeField() field.Field {
-	return e.f
+	return e.pr.GetField()
 }
 
 func (e *SlowEvaluator) EvaluatePolynomial(p *field.Polynomial) ([]uint64, error) {
@@ -104,8 +104,9 @@ func (e *SlowEvaluator) EvaluatePolynomial(p *field.Polynomial) ([]uint64, error
 	points := e.EvaluationPoints(len(p.ToSlice()))
 	values := make([]uint64, len(points))
 
+	pr := e.pr
 	for i, x := range points {
-		values[i] = p.Eval(x)
+		values[i] = pr.Evaluate(p, x)
 	}
 
 	return values, nil
@@ -115,7 +116,7 @@ func (e *SlowEvaluator) GenerateLocatorPolynomial(n int) *field.Polynomial {
 	xs := e.EvaluationPoints(n)
 	polys := make([]*field.Polynomial, n)
 
-	f := e.f
+	f := e.pr.GetField()
 	for i, x := range xs {
 		// create m_i(x) = (x - x_i)
 		coeffs := make([]uint64, 2)
@@ -125,7 +126,7 @@ func (e *SlowEvaluator) GenerateLocatorPolynomial(n int) *field.Polynomial {
 		polys[i] = field.NewPolynomial(f, coeffs, false)
 	}
 
-	return field.PolyProduct(f, polys)
+	return field.PolyProduct(e.pr, polys)
 }
 
 // does not support fast Gao.

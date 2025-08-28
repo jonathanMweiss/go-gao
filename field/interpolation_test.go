@@ -13,24 +13,26 @@ func TestMonomialQuickDiv(t *testing.T) {
 	f, err := NewPrimeField(157)
 	a.NoError(err)
 
+	pr := NewDensePolyRing(f)
 	t.Run("simple", func(t *testing.T) {
 		m1 := NewPolynomial(f, []uint64{5, 1}, false)
 		m2 := NewPolynomial(f, []uint64{3, 1}, false)
 
-		m := m1.Mul(m2)
+		m := &Polynomial{}
+		pr.MulPoly(m1, m2, m)
 
-		q, r := m.LongDiv(m1)
+		q, r := pr.LongDiv(m, m1)
 
-		a.Equal(makeConstantPoly(f, 0).ToSlice(), r.ToSlice())
+		a.True(r.IsZero())
 		a.Equal(m2.ToSlice(), q.ToSlice())
 
-		intr := NewInterpolator(f)
+		intr := NewInterpolator(pr)
 
 		q_ := intr.mDivMi(m, m1)
 		a.Equal(q.ToSlice(), q_.ToSlice())
 
-		q, r = m.LongDiv(m2)
-		a.Equal(makeConstantPoly(f, 0).ToSlice(), r.ToSlice())
+		q, r = pr.LongDiv(m, m2)
+		a.True(r.IsZero())
 		a.Equal(m1.ToSlice(), q.ToSlice())
 
 		q_ = intr.mDivMi(m, m2)
@@ -40,14 +42,14 @@ func TestMonomialQuickDiv(t *testing.T) {
 	t.Run("complex", func(t *testing.T) {
 		xs := []uint64{1, 2, 3, 5, 6, 7}
 
-		intr := NewInterpolator(f)
+		intr := NewInterpolator(pr)
 
 		miSlice := intr.createMiSlice(xs)
-		m := PolyProduct(f, miSlice)
+		m := PolyProduct(pr, miSlice)
 
 		for _, mi := range miSlice {
 			qQuickDiv := intr.mDivMi(m, mi)
-			qLongdiv, _ := m.LongDiv(mi)
+			qLongdiv, _ := pr.LongDiv(m, mi)
 			a.Equal(qQuickDiv.ToSlice(), qLongdiv.ToSlice())
 		}
 	})
@@ -59,12 +61,14 @@ func TestInterpolation(t *testing.T) {
 	f, err := NewPrimeField(157)
 	a.NoError(err)
 
+	pr := NewDensePolyRing(f)
+
 	coeffs := []uint64{0, 1, 2}
 	p := NewPolynomial(f, coeffs, false)
 
-	intr := NewInterpolator(f)
+	intr := NewInterpolator(pr)
 
-	xs, ys := evalPolyForTest(p, 0, 3)
+	xs, ys := evalPolyForTest(pr, p, 0, 3)
 
 	interpolated, err := intr.Interpolate(xs, ys)
 	a.NoError(err)
@@ -83,6 +87,8 @@ func FuzzInterpolation(f *testing.F) {
 		f.FailNow()
 	}
 
+	pr := NewDensePolyRing(fld)
+
 	f.Fuzz(func(t *testing.T, randomSeed uint64) {
 		a := assert.New(t)
 		const boundingDegree = 10
@@ -90,9 +96,9 @@ func FuzzInterpolation(f *testing.F) {
 		p := randomPolynomial(fld, randomSeed, boundingDegree)
 
 		// interpolate a random polynomial
-		intr := NewInterpolator(fld)
+		intr := NewInterpolator(pr)
 
-		xs, ys := evalPolyForTest(p, int(randomSeed), boundingDegree)
+		xs, ys := evalPolyForTest(pr, p, int(randomSeed), boundingDegree)
 		q, err := intr.Interpolate(xs, ys)
 		a.NoError(err)
 
@@ -102,7 +108,7 @@ func FuzzInterpolation(f *testing.F) {
 
 }
 
-func evalPolyForTest(p *Polynomial, randomSeed, numEvals int) ([]uint64, []uint64) {
+func evalPolyForTest(pr PolyRing, p *Polynomial, randomSeed, numEvals int) ([]uint64, []uint64) {
 	xs := make([]uint64, numEvals)
 	for i := range xs {
 		xs[i] = p.f.Reduce(uint64(randomSeed + i + 1))
@@ -111,7 +117,7 @@ func evalPolyForTest(p *Polynomial, randomSeed, numEvals int) ([]uint64, []uint6
 	ys := make([]uint64, len(xs))
 
 	for i, x := range xs {
-		ys[i] = p.Eval(x)
+		ys[i] = pr.Evaluate(p, x)
 	}
 
 	return xs, ys
@@ -123,12 +129,14 @@ func BenchmarkMDivMi(b *testing.B) {
 	f, err := NewPrimeField(157)
 	a.NoError(err)
 
+	pr := NewDensePolyRing(f)
+
 	xs := []uint64{1, 2, 3, 5, 6, 7}
 
-	intr := NewInterpolator(f)
+	intr := NewInterpolator(pr)
 
 	miSlice := intr.createMiSlice(xs)
-	m := PolyProduct(f, miSlice)
+	m := PolyProduct(pr, miSlice)
 
 	mi := miSlice[0]
 
@@ -144,7 +152,7 @@ func BenchmarkMDivMi(b *testing.B) {
 		b.ResetTimer()
 
 		for i := 0; i < b.N; i++ {
-			m.LongDiv(mi)
+			pr.LongDiv(m, mi)
 		}
 	})
 }
