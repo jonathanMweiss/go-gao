@@ -8,11 +8,26 @@ import (
 	"github.com/tuneinsight/lattigo/v6/ring"
 )
 
+type Field interface {
+	Equals(a, b uint64) bool
+	Add(a, b uint64) uint64
+	Sub(a, b uint64) uint64
+	Mul(a, b uint64) uint64
+	Pow(base, exp uint64) uint64
+
+	Neg(a uint64) uint64
+	Inverse(a uint64) uint64
+	Reduce(a uint64) uint64
+
+	Modulus() uint64
+	GetRootOfUnity(n uint64) (uint64, error)
+	Generator() uint64
+}
+
 type PrimeField struct {
 	prime     uint64
 	generator uint64
 	factors   []uint64
-	asBigInt  *big.Int
 }
 
 var (
@@ -25,7 +40,7 @@ const maxBitUsage = 63
 /*
 Assumes you are using a prime. Will not check for validity.
 */
-func NewPrimeField(prime uint64) (*PrimeField, error) {
+func NewPrimeField(prime uint64) (Field, error) {
 	if prime > (1 << maxBitUsage) {
 		return nil, errPrimeTooLarge
 	}
@@ -49,7 +64,6 @@ func NewPrimeField(prime uint64) (*PrimeField, error) {
 		prime:     prime,
 		generator: g,
 		factors:   factors,
-		asBigInt:  bgint,
 	}, nil
 }
 
@@ -59,33 +73,38 @@ var (
 	errNSTooSmall    = errors.New("n must be >= 2")
 )
 
-func (f *PrimeField) GetRootOfUnity(n uint64) (Elem, error) {
+// Modulus implements Field.
+func (f *PrimeField) Modulus() uint64 {
+	return f.prime
+}
+
+func (f *PrimeField) GetRootOfUnity(n uint64) (uint64, error) {
 	if n == 0 || n == 1 {
-		return Elem{}, errNSTooSmall
+		return 0, errNSTooSmall
 	}
 
 	if !IsPowerOfTwo(n) {
-		return Elem{}, errNotPowerOfTwo
+		return 0, errNotPowerOfTwo
 	}
 
 	if (f.prime-1)%n != 0 {
-		return Elem{}, errNotDivisible
+		return 0, errNotDivisible
 	}
 
 	// The nth root of unity is the generator raised to the power of (prime-1)/n
 	// since g^(x) == 1 (mod p) iff x=p-1, then w=g^((p-1)/n) is not 1, and the following n powers of w != 1 too.
 	// proof is by contradiction to g being the generator of the field.
-	return f.ElemFromUint64(f.generator).Pow((f.prime - 1) / n), nil
+	return f.Pow(f.generator, (f.prime-1)/n), nil
+
 }
 
-func (f *PrimeField) ElemSlice(vals []uint64) []Elem {
-	elems := make([]Elem, len(vals))
-
+func (f *PrimeField) ElemSlice(vals []uint64) []uint64 {
+	mod := f.prime
 	for i, v := range vals {
-		elems[i] = f.ElemFromUint64(v)
+		vals[i] = v % mod
 	}
 
-	return elems
+	return vals
 }
 
 func IsPowerOfTwo(n uint64) bool {
@@ -104,89 +123,54 @@ func (f *PrimeField) Generator() uint64 {
 func (f *PrimeField) Factors() []uint64 {
 	return f.factors
 }
+
 func (f *PrimeField) constantPolynomial(val uint64) *Polynomial {
 	return &Polynomial{
-		inner:            []Elem{f.ElemFromUint64(val)},
+		inner:            []uint64{f.Reduce(val)},
 		isCoefficientMod: false,
 		f:                f,
 	}
 }
 
-type Elem struct {
-	field *PrimeField
-	value uint64
+func (f *PrimeField) Reduce(val uint64) uint64 {
+	return val % f.prime
 }
 
-func (f *PrimeField) ElemFromUint64(val uint64) Elem {
-	return Elem{
-		field: f,
-		value: val % f.prime,
-	}
-}
-
-func (e Elem) Value() uint64 {
-	return e.value
-}
-
-func (e Elem) Copy() Elem {
-	return Elem{
-		field: e.field,
-		value: e.value,
-	}
-}
-
-func (e Elem) IsZero() bool {
-	return e.value == 0
-}
-
-func (e Elem) isOne() bool {
-	return e.value == 1
-}
-
-func (e Elem) Add(b Elem) Elem {
-	if e.IsZero() {
+func (f *PrimeField) Add(a, b uint64) uint64 {
+	if a == 0 {
 		// used for Elem{}, or Elem{0,nilField}.
 		return b
 	}
 
-	tmp := e.value + b.value // can't overflow since adding two integers smaller than 2^63.
-	if tmp >= e.field.prime {
-		tmp -= e.field.prime
+	tmp := a + b // can't overflow since adding two integers smaller than 2^63.
+	if tmp >= f.prime {
+		tmp -= f.prime
 	}
 
-	return Elem{e.field, tmp}
+	return tmp
 }
 
 // Mul returns e * b (mod field prime).
-func (e Elem) Mul(b Elem) Elem {
-	// Early outs (identity/annihilator).
-	switch {
-	case e.IsZero() || b.IsZero():
-		return Elem{e.field, 0}
-	case e.isOne():
-		return b
-	case b.isOne():
-		return e
+func (f *PrimeField) Mul(a, b uint64) uint64 {
+	if a == 0 || b == 0 {
+		return 0
 	}
 
-	// 128-bit product, then reduce: (hi:lo) mod p.
-	return Elem{e.field, fieldMul(e.value, b.value, e.field.prime)}
+	return fieldMul(a, b, f.prime)
 }
 
-func fieldMul(a, b uint64, prime uint64) uint64 {
+func fieldMul(a, b uint64, mod uint64) uint64 {
 	hi, lo := bits.Mul64(a, b)
-	_, rem := bits.Div64(hi, lo, prime)
+	_, rem := bits.Div64(hi, lo, mod)
 
 	return rem
 }
 
 // https://en.wikipedia.org/wiki/Exponentiation_by_squaring
-func (e Elem) Pow(exp uint64) Elem {
-	mod := e.field.prime
-	base := uint64(e.value)
+func (f *PrimeField) Pow(base, exp uint64) uint64 {
+	mod := f.prime
 
 	x := uint64(1)
-
 	for exp > 0 {
 		if exp%2 == 1 { // If exponent is odd, multiply base with x
 			x = fieldMul(x, base, mod)
@@ -197,33 +181,38 @@ func (e Elem) Pow(exp uint64) Elem {
 		exp /= 2                         // Halve the exponent
 	}
 
-	return Elem{e.field, x % mod}
+	return x % mod
 }
 
-func (e Elem) Inverse() Elem {
+func (f *PrimeField) Inverse(e uint64) uint64 {
 	// Fermat's little theorem: a^(p) = a (mod p)
 	// thus:
 	// a^(p-2)*a^p = a^(2p-2) = a^(p-1)^2 = 1*1=1 (mod p)
 	// a^(p-2) is the inverse of a
-	if e.IsZero() {
+	if e == 0 {
 		panic("zero has no inverse")
 	}
 
-	return e.Pow(e.field.prime - 2)
+	return f.Pow(e, f.prime-2)
 }
 
-func (e Elem) Neg() Elem {
-	return e.field.ElemFromUint64(e.field.prime - e.value)
-}
-
-func (e Elem) Sub(b Elem) Elem {
-	if e.value < b.value {
-		return Elem{e.field, e.field.prime - (b.value - e.value)}
+func (f *PrimeField) Neg(e uint64) uint64 {
+	if e == 0 {
+		return 0
 	}
 
-	return Elem{e.field, e.value - b.value}
+	return (f.prime - e)
 }
 
-func (e Elem) Equals(o Elem) bool {
-	return e.field == o.field && e.value == o.value
+func (f *PrimeField) Sub(a, b uint64) uint64 {
+	if a < b {
+		return f.prime - (b - a)
+	}
+
+	return a - b
+}
+
+func (f *PrimeField) Equals(a, b uint64) bool {
+	mod := f.prime
+	return (a % mod) == (b % mod)
 }

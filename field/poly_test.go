@@ -15,9 +15,9 @@ func TestCheck(t *testing.T) {
 	f, err := NewPrimeField(157)
 	a.NoError(err)
 
-	slice := f.ElemSlice([]uint64{1, 2, 0, 3})
+	slice := []uint64{1, 2, 0, 3}
 
-	fmt.Println(NewPolynomial(slice, false))
+	fmt.Println(NewPolynomial(f, slice, false))
 }
 
 func TestPolyAdd(t *testing.T) {
@@ -27,10 +27,10 @@ func TestPolyAdd(t *testing.T) {
 	a.NoError(err)
 
 	t.Run("sameSize", func(t *testing.T) {
-		slice := f.ElemSlice([]uint64{1, 2, 0, 3})
+		slice := []uint64{1, 2, 0, 3}
 
-		p1 := NewPolynomial(slice, false)
-		p2 := NewPolynomial(slice, false)
+		p1 := NewPolynomial(f, slice, false)
+		p2 := NewPolynomial(f, slice, false)
 
 		sum := p1.Add(p2)
 
@@ -38,11 +38,11 @@ func TestPolyAdd(t *testing.T) {
 	})
 
 	t.Run("differentSizes", func(t *testing.T) {
-		slice := f.ElemSlice([]uint64{1, 2, 0, 3})
-		slice2 := f.ElemSlice([]uint64{1, 2, 0})
+		slice := []uint64{1, 2, 0, 3}
+		slice2 := []uint64{1, 2, 0}
 
-		p1 := NewPolynomial(slice, false)
-		p2 := NewPolynomial(slice2, false)
+		p1 := NewPolynomial(f, slice, false)
+		p2 := NewPolynomial(f, slice2, false)
 
 		sum := p1.Add(p2)
 		sum2 := p2.Add(p1)
@@ -51,12 +51,12 @@ func TestPolyAdd(t *testing.T) {
 	})
 
 	t.Run("WrapAroundElems", func(t *testing.T) {
-		q := f.prime - 1
+		q := f.Modulus() - 1
 
-		slice := f.ElemSlice([]uint64{q, q, q, q})
+		slice := []uint64{q, q, q, q}
 
-		p1 := NewPolynomial(slice, false)
-		p2 := NewPolynomial(f.ElemSlice([]uint64{1, 1, 1, 1}), false)
+		p1 := NewPolynomial(f, slice, false)
+		p2 := NewPolynomial(f, []uint64{1, 1, 1, 1}, false)
 
 		sum := p1.Add(p2)
 		a.True(sum.IsZero())
@@ -70,10 +70,10 @@ func TestPolySub(t *testing.T) {
 	a.NoError(err)
 
 	t.Run("sameSize", func(t *testing.T) {
-		slice := f.ElemSlice([]uint64{1, 2, 0, 3})
+		slice := []uint64{1, 2, 0, 3}
 
-		p1 := NewPolynomial(slice, false)
-		p2 := NewPolynomial(slice, false)
+		p1 := NewPolynomial(f, slice, false)
+		p2 := NewPolynomial(f, slice, false)
 
 		sum := p1.Sub(p2)
 
@@ -81,11 +81,11 @@ func TestPolySub(t *testing.T) {
 	})
 
 	t.Run("differentSizes", func(t *testing.T) {
-		slice := f.ElemSlice([]uint64{1, 2, 0, 3})
-		slice2 := f.ElemSlice([]uint64{1, 2, 0})
+		slice := []uint64{1, 2, 0, 3}
+		slice2 := []uint64{1, 2, 0}
 
-		p1 := NewPolynomial(slice, false)
-		p2 := NewPolynomial(slice2, false)
+		p1 := NewPolynomial(f, slice, false)
+		p2 := NewPolynomial(f, slice2, false)
 
 		sum := p1.Sub(p2)
 		a.Equal([]uint64{0, 0, 0, 3}, sum.ToSlice())
@@ -102,10 +102,10 @@ func TestPolyMul(t *testing.T) {
 	a.NoError(err)
 
 	t.Run("sameSize", func(t *testing.T) {
-		slice := f.ElemSlice([]uint64{1, 2, 3})
+		slice := []uint64{1, 2, 3}
 
-		p1 := NewPolynomial(slice, false)
-		p2 := NewPolynomial(slice, false)
+		p1 := NewPolynomial(f, slice, false)
+		p2 := NewPolynomial(f, slice, false)
 
 		prod := p1.Mul(p2)
 
@@ -113,11 +113,11 @@ func TestPolyMul(t *testing.T) {
 	})
 
 	t.Run("differentSizes", func(t *testing.T) {
-		slice := f.ElemSlice([]uint64{1, 2, 0, 3})
-		slice2 := f.ElemSlice([]uint64{1, 2, 0})
+		slice := []uint64{1, 2, 0, 3}
+		slice2 := []uint64{1, 2, 0}
 
-		p1 := NewPolynomial(slice, false)
-		p2 := NewPolynomial(slice2, false)
+		p1 := NewPolynomial(f, slice, false)
+		p2 := NewPolynomial(f, slice2, false)
 
 		prod := p1.Mul(p2)
 		prod2 := p2.Mul(p1)
@@ -126,10 +126,10 @@ func TestPolyMul(t *testing.T) {
 	})
 
 	t.Run("coeffmod", func(t *testing.T) {
-		slice := f.ElemSlice([]uint64{1, 2, 3})
+		slice := []uint64{1, 2, 3}
 
-		p1 := NewPolynomial(slice, true)
-		p2 := NewPolynomial(slice, true)
+		p1 := NewPolynomial(f, slice, true)
+		p2 := NewPolynomial(f, slice, true)
 
 		prod := p1.Mul(p2)
 
@@ -144,8 +144,8 @@ func TestPolyLongDiv(t *testing.T) {
 	a.NoError(err)
 
 	t.Run("simple", func(t *testing.T) {
-		p1 := NewPolynomial(f.ElemSlice([]uint64{1, 2, 3}), false)
-		p2 := NewPolynomial(f.ElemSlice([]uint64{1, 2, 3}), false)
+		p1 := NewPolynomial(f, []uint64{1, 2, 3}, false)
+		p2 := NewPolynomial(f, []uint64{1, 2, 3}, false)
 
 		quotient, remainder := p1.LongDiv(p2)
 		a.Equal([]uint64{1}, quotient.ToSlice())
@@ -157,8 +157,8 @@ func TestPolyLongDiv(t *testing.T) {
 	})
 
 	t.Run("differentSizes", func(t *testing.T) {
-		p1 := NewPolynomial(f.ElemSlice([]uint64{1, 2, 3}), false)
-		p2 := NewPolynomial(f.ElemSlice([]uint64{1, 2}), false)
+		p1 := NewPolynomial(f, []uint64{1, 2, 3}, false)
+		p2 := NewPolynomial(f, []uint64{1, 2}, false)
 
 		quotient, remainder := p1.LongDiv(p2)
 
@@ -169,8 +169,8 @@ func TestPolyLongDiv(t *testing.T) {
 		a.True(p2.Equals(r))
 		a.True(q.IsZero())
 
-		p1 = NewPolynomial(f.ElemSlice([]uint64{1, 2, 0, 0, 3}), false)
-		p2 = NewPolynomial(f.ElemSlice([]uint64{1, 2}), false)
+		p1 = NewPolynomial(f, []uint64{1, 2, 0, 0, 3}, false)
+		p2 = NewPolynomial(f, []uint64{1, 2}, false)
 
 		quotient, remainder = p1.LongDiv(p2)
 		a.Equal([]uint64{3, 1, 3, 4}, quotient.ToSlice())
@@ -178,8 +178,8 @@ func TestPolyLongDiv(t *testing.T) {
 	})
 
 	t.Run("complex", func(t *testing.T) {
-		p1 := NewPolynomial(f.ElemSlice([]uint64{1, 0, 0, 0, 2, 3}), false)
-		p2 := NewPolynomial(f.ElemSlice([]uint64{1, 0, 1, 0, 2}), false)
+		p1 := NewPolynomial(f, []uint64{1, 0, 0, 0, 2, 3}, false)
+		p2 := NewPolynomial(f, []uint64{1, 0, 1, 0, 2}, false)
 
 		quotient, remainder := p1.LongDiv(p2)
 
@@ -195,26 +195,26 @@ func TestPolyEvaluation(t *testing.T) {
 	a.NoError(err)
 
 	t.Run("simple", func(t *testing.T) {
-		slice := f.ElemSlice([]uint64{1, 2, 3})
+		slice := []uint64{1, 2, 3}
 
-		p := NewPolynomial(slice, false)
+		p := NewPolynomial(f, slice, false)
 
 		// pairs of {x,p(x)}
 		test := [][2]uint64{{1, 1}, {2, 2}, {3, 4}, {4, 2}}
 		for _, tt := range test {
-			a.Equal(tt[1], p.Eval(tt[0]).Value())
+			a.Equal(tt[1], p.Eval(tt[0]))
 		}
 	})
 
 	t.Run("zero", func(t *testing.T) {
-		slice := f.ElemSlice([]uint64{0, 0, 0})
+		slice := []uint64{0, 0, 0}
 
-		p := NewPolynomial(slice, false)
+		p := NewPolynomial(f, slice, false)
 
 		// pairs of {x,p(x)}
 		test := [][2]uint64{{1, 0}, {2, 0}, {3, 0}, {4, 0}}
 		for _, tt := range test {
-			a.Equal(tt[1], p.Eval(tt[0]).Value())
+			a.Equal(tt[1], p.Eval(tt[0]))
 		}
 	})
 }
@@ -255,13 +255,13 @@ func FuzzPEEA(f *testing.F) {
 	})
 }
 
-func randomPolynomial(f *PrimeField, seed uint64, maxDegree int) *Polynomial {
-	coefficients := make([]Elem, maxDegree)
+func randomPolynomial(f Field, seed uint64, maxDegree int) *Polynomial {
+	coefficients := make([]uint64, maxDegree)
 	for i := 0; i < maxDegree; i++ {
-		coefficients[i] = f.ElemFromUint64(seed + uint64(i))
+		coefficients[i] = f.Reduce(seed + uint64(i))
 	}
 
-	return NewPolynomial(coefficients, false)
+	return NewPolynomial(f, coefficients, false)
 }
 
 func BenchmarkPolyDiv(b *testing.B) {
@@ -312,6 +312,71 @@ func BenchmarkPEEA(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				PartialExtendedEuclidean(p1, p2, (n+k)/2) // Gao's decoder partialEEA.
 			}
+		})
+	}
+}
+
+func makeRoots(n int) []uint64 {
+	roots := make([]uint64, n)
+	for i := 0; i < n; i++ {
+		roots[i] = uint64(i*7 + 3)
+	}
+	return roots
+}
+
+func TestLocatorPolynomial(t *testing.T) {
+	roots := makeRoots(15)
+
+	f, err := NewPrimeField(largePrime)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p := PolyProductMonicNegRoots(f, roots)
+
+	intr := Interpolator{f}
+
+	q := PolyProduct(f, intr.createMiSlice(roots))
+
+	if !p.Equals(q) {
+		t.FailNow()
+	}
+}
+
+var benchPolySink *Polynomial // avoid DCE
+
+/*
+pkg: github.com/jonathanmweiss/go-gao/field
+BenchmarkPolyProductMonicNegRoots
+BenchmarkPolyProductMonicNegRoots/n=15
+BenchmarkPolyProductMonicNegRoots/n=15-10         	 1799329	       661.1 ns/op	     304 B/op	       3 allocs/op
+BenchmarkPolyProductMonicNegRoots/n=32
+BenchmarkPolyProductMonicNegRoots/n=32-10         	  432550	      2724 ns/op	     624 B/op	       3 allocs/op
+BenchmarkPolyProductMonicNegRoots/n=64
+BenchmarkPolyProductMonicNegRoots/n=64-10         	   95090	     11852 ns/op	    1200 B/op	       3 allocs/op
+BenchmarkPolyProductMonicNegRoots/n=128
+BenchmarkPolyProductMonicNegRoots/n=128-10        	   14961	     79504 ns/op	    2352 B/op	       3 allocs/op
+BenchmarkPolyProductMonicNegRoots/n=256
+BenchmarkPolyProductMonicNegRoots/n=256-10        	    2966	    406873 ns/op	    4656 B/op	       3 allocs/op
+*/
+func BenchmarkPolyProductMonicNegRoots(b *testing.B) {
+	f, err := NewPrimeField(largePrime)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	for _, n := range []int{15, 32, 64, 128, 256} {
+		roots := makeRoots(n) // prepare inputs outside timed loop
+
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			var p *Polynomial
+			for i := 0; i < b.N; i++ {
+				p = PolyProductMonicNegRoots(f, roots)
+			}
+			b.StopTimer()
+			benchPolySink = p
 		})
 	}
 }

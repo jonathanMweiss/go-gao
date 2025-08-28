@@ -14,13 +14,14 @@ func TestMonomialQuickDiv(t *testing.T) {
 	a.NoError(err)
 
 	t.Run("simple", func(t *testing.T) {
-		m1 := NewPolynomial(f.ElemSlice([]uint64{5, 1}), false)
-		m2 := NewPolynomial(f.ElemSlice([]uint64{3, 1}), false)
+		m1 := NewPolynomial(f, []uint64{5, 1}, false)
+		m2 := NewPolynomial(f, []uint64{3, 1}, false)
 
 		m := m1.Mul(m2)
 
 		q, r := m.LongDiv(m1)
-		a.Equal(f.constantPolynomial(0).ToSlice(), r.ToSlice())
+
+		a.Equal(makeConstantPoly(f, 0).ToSlice(), r.ToSlice())
 		a.Equal(m2.ToSlice(), q.ToSlice())
 
 		intr := NewInterpolator(f)
@@ -29,7 +30,7 @@ func TestMonomialQuickDiv(t *testing.T) {
 		a.Equal(q.ToSlice(), q_.ToSlice())
 
 		q, r = m.LongDiv(m2)
-		a.Equal(f.constantPolynomial(0).ToSlice(), r.ToSlice())
+		a.Equal(makeConstantPoly(f, 0).ToSlice(), r.ToSlice())
 		a.Equal(m1.ToSlice(), q.ToSlice())
 
 		q_ = intr.mDivMi(m, m2)
@@ -42,7 +43,7 @@ func TestMonomialQuickDiv(t *testing.T) {
 		intr := NewInterpolator(f)
 
 		miSlice := intr.createMiSlice(xs)
-		m := f.PolyProduct(miSlice)
+		m := PolyProduct(f, miSlice)
 
 		for _, mi := range miSlice {
 			qQuickDiv := intr.mDivMi(m, mi)
@@ -58,8 +59,8 @@ func TestInterpolation(t *testing.T) {
 	f, err := NewPrimeField(157)
 	a.NoError(err)
 
-	coeffs := f.ElemSlice([]uint64{0, 1, 2})
-	p := NewPolynomial(coeffs, false)
+	coeffs := []uint64{0, 1, 2}
+	p := NewPolynomial(f, coeffs, false)
 
 	intr := NewInterpolator(f)
 
@@ -102,16 +103,15 @@ func FuzzInterpolation(f *testing.F) {
 }
 
 func evalPolyForTest(p *Polynomial, randomSeed, numEvals int) ([]uint64, []uint64) {
-
 	xs := make([]uint64, numEvals)
 	for i := range xs {
-		xs[i] = uint64(randomSeed+i+1) % p.f.prime
+		xs[i] = p.f.Reduce(uint64(randomSeed + i + 1))
 	}
 
 	ys := make([]uint64, len(xs))
 
 	for i, x := range xs {
-		ys[i] = p.Eval(x).Value()
+		ys[i] = p.Eval(x)
 	}
 
 	return xs, ys
@@ -128,7 +128,7 @@ func BenchmarkMDivMi(b *testing.B) {
 	intr := NewInterpolator(f)
 
 	miSlice := intr.createMiSlice(xs)
-	m := f.PolyProduct(miSlice)
+	m := PolyProduct(f, miSlice)
 
 	mi := miSlice[0]
 

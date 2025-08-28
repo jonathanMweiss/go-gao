@@ -102,7 +102,7 @@ var ErrDataElementsTooLarge = errors.New("data elements too large")
 func (gao *Code) Encode(data []uint64) (map[uint64]uint64, error) {
 	f := gao.PrimeField()
 
-	q := f.Prime()
+	q := f.Modulus()
 	for _, d := range data {
 		if d >= q {
 			return nil, ErrDataElementsTooLarge
@@ -119,8 +119,7 @@ func (gao *Code) Encode(data []uint64) (map[uint64]uint64, error) {
 	copy(paddedData, data)
 
 	// create polynomial from data.
-	coefficients := f.ElemSlice(paddedData)
-	p := field.NewPolynomial(coefficients, false)
+	p := field.NewPolynomial(f, paddedData, false)
 	// evaluate polynomial at n points.
 
 	ys, err := gao.EvaluationMap.EvaluatePolynomial(p)

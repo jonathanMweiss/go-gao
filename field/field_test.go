@@ -15,18 +15,18 @@ func TestRootsOfUnity(t *testing.T) {
 
 	root, err := f.GetRootOfUnity(4)
 	a.NoError(err)
-	a.Equal(uint64(65281), root.value)
+	a.Equal(uint64(65281), root)
 
 	root, err = f.GetRootOfUnity(8)
 	a.NoError(err)
-	a.Equal(uint64(4096), root.value)
+	a.Equal(uint64(4096), root)
 
 	f, err = NewPrimeField(157)
 	a.NoError(err)
 
 	root, err = f.GetRootOfUnity(4)
 	a.NoError(err)
-	a.Equal(uint64(129), root.value)
+	a.Equal(uint64(129), root)
 }
 
 func TestCorrectOps(t *testing.T) {
@@ -37,18 +37,18 @@ func TestCorrectOps(t *testing.T) {
 
 	n := uint64((1 << 63) - 1)
 
-	e1 := f.ElemFromUint64(n)
+	e1 := f.Reduce(n)
 
 	e2 := &big.Int{}
 	e2.SetUint64(n)
 	e2.Mul(e2, e2)
-	e2.Mod(e2, f.asBigInt)
+	e2.Mod(e2, new(big.Int).SetUint64(f.Modulus()))
 
-	a.Equal(e2.Uint64(), e1.Mul(e1).Value())
+	a.Equal(e2.Uint64(), f.Mul(e1, e1))
 	// ((1<<63 - 1)^2) %8651551326164947003
 
-	res := e1.Mul(e1.Inverse())
-	a.Equal(uint64(1), res.Value())
+	res := f.Mul(e1, f.Inverse(e1))
+	a.Equal(uint64(1), res)
 }
 
 func FuzzInverse(f *testing.F) {
@@ -64,17 +64,17 @@ func FuzzInverse(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, num uint64) {
 
-		e1 := fld.ElemFromUint64(num)
-		e2 := e1.Inverse()
+		e1 := fld.Reduce(num)
+		e2 := fld.Inverse(e1)
 
-		res := e1.Mul(e2)
-		if res.Value() != 1 {
-			t.Fatalf("expected 1, got %d", res.Value())
+		res := fld.Mul(e1, e2)
+		if res != 1 {
+			t.Fatalf("expected 1, got %d", res)
 		}
 
-		ne1 := e1.Neg()
-		if ne1.Add(e1).Value() != uint64(0) {
-			t.Fatalf("expected 0, got %d", ne1.Add(e1).Value())
+		ne1 := fld.Neg(e1)
+		if fld.Add(ne1, e1) != uint64(0) {
+			t.Fatalf("expected 0, got %d", fld.Add(ne1, e1))
 		}
 	})
 }
@@ -92,11 +92,11 @@ func FuzzNegate(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, num uint64) {
 
-		e1 := fld.ElemFromUint64(num)
-		ne1 := e1.Neg()
+		e1 := fld.Reduce(num)
+		ne1 := fld.Neg(e1)
 
-		if ne1.Add(e1).Value() != uint64(0) {
-			t.Fatalf("expected 0, got %d", ne1.Add(e1).Value())
+		if fld.Add(ne1, e1) != uint64(0) {
+			t.Fatalf("expected 0, got %d", fld.Add(ne1, e1))
 		}
 	})
 }
@@ -109,28 +109,29 @@ func BenchmarkMulMod(b *testing.B) {
 		b.FailNow()
 	}
 
-	e1 := f.ElemFromUint64((1 << 63) - 2)
-	e2 := f.ElemFromUint64((1 << 60) + 312)
+	e1 := f.Reduce((1 << 63) - 2)
+	e2 := f.Reduce((1 << 60) + 312)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		e1.Mul(e2)
+		f.Mul(e1, e2)
 	}
 }
 
-func (e Elem) PowSlow(p uint64) Elem {
+func (f *PrimeField) PowSlow(e, p uint64) uint64 {
 	if p == 0 {
-		return e.field.ElemFromUint64(1)
+		return 1
 	}
 
 	eBigInt := &big.Int{}
-	eBigInt.SetUint64(e.value)
+	eBigInt.SetUint64(e)
 
 	pBigInt := &big.Int{}
 	pBigInt.SetUint64(p)
 
-	return e.field.ElemFromUint64(
-		eBigInt.Exp(eBigInt, pBigInt, e.field.asBigInt).Uint64(),
+	modAsBig := new(big.Int).SetUint64(f.Modulus())
+	return f.Reduce(
+		eBigInt.Exp(eBigInt, pBigInt, modAsBig).Uint64(),
 	)
 }
 
@@ -140,18 +141,23 @@ func BenchmarkPowMod(b *testing.B) {
 		b.FailNow()
 	}
 
-	e1 := f.ElemFromUint64((1 << 63) - 2)
+	e1 := f.Reduce((1 << 63) - 2)
 
 	b.ResetTimer()
 	b.Run("Pow", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			e1.Pow(1 << 62)
+			f.Pow(e1, 1<<62)
 		}
 	})
 
+	fp, ok := f.(*PrimeField)
+	if !ok {
+		b.FailNow()
+	}
+
 	b.Run("PowBig", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			e1.PowSlow(1 << 62)
+			fp.PowSlow(e1, 1<<62)
 		}
 	})
 
@@ -166,10 +172,12 @@ func BenchmarkMulModBig(b *testing.B) {
 	b1 := big.NewInt((1 << 63) - 2)
 	b2 := big.NewInt((1 << 60) + 312)
 
+	fAsBigint := new(big.Int).SetUint64(f.Modulus())
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		b1.Mul(b1, b2)
-		b1.Mod(b1, f.asBigInt)
+		b1.Mod(b1, fAsBigint)
 	}
 }
 
@@ -189,14 +197,38 @@ func FuzzSub_Simple(fz *testing.F) {
 
 	fz.Fuzz(func(t *testing.T, aSeed, bSeed uint64) {
 		// Reduce inputs into field domain
-		a := pf.ElemFromUint64(aSeed)
-		b := pf.ElemFromUint64(bSeed)
+		a := pf.Reduce(aSeed)
+		b := pf.Reduce(bSeed)
 
-		got := a.Sub(b).Value()
-		want := a.Add(b.Neg()).Value() // check via a + (-b)
+		got := pf.Sub(a, b)
+		want := pf.Add(a, pf.Neg(b))
 
 		if got != want {
-			t.Fatalf("Sub mismatch: got=%d, want=%d (a=%d, b=%d, p=%d)", got, want, a.Value(), b.Value(), p)
+			t.Fatalf("Sub mismatch: got=%d, want=%d (a=%d, b=%d, p=%d)", got, want, a, b, p)
 		}
 	})
+}
+
+func TestRootsOfUnityGeneration(t *testing.T) {
+	a := assert.New(t)
+
+	f, err := NewPrimeField(65537) // many roots of unity...
+	a.NoError(err)
+
+	for i := range 8 {
+		N := uint64(1 << (i + 1))
+		root, err := f.GetRootOfUnity(N)
+		a.NoError(err)
+		a.True(isRootOfUnityOfOrderN(f, root, N))
+	}
+}
+
+func isRootOfUnityOfOrderN(field Field, root, n uint64) bool {
+	mp := make(map[uint64]int)
+	for i := uint64(0); i < n; i++ {
+		tmp := field.Pow(root, i)
+		mp[tmp]++
+	}
+	// Check if all powers are distinct
+	return len(mp) == int(n) && mp[1] == 1
 }

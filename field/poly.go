@@ -7,8 +7,8 @@ import (
 )
 
 type Polynomial struct {
-	f                *PrimeField
-	inner            []Elem
+	f                Field
+	inner            []uint64
 	isCoefficientMod bool
 }
 
@@ -18,7 +18,7 @@ and ordered from lowest to highest degree. (e.g. [1, 2, 3] is 1 + 2x + 3x^2)
 
 Can be point representation, generated from numerous evaluation points.
 */
-func NewPolynomial(inner []Elem, isPointRepresentation bool) *Polynomial {
+func NewPolynomial(f Field, inner []uint64, isPointRepresentation bool) *Polynomial {
 	// validate inner are all in the same field
 	// validate inner
 	if len(inner) == 0 {
@@ -28,12 +28,12 @@ func NewPolynomial(inner []Elem, isPointRepresentation bool) *Polynomial {
 	return &Polynomial{
 		inner:            inner,
 		isCoefficientMod: isPointRepresentation,
-		f:                inner[0].field,
+		f:                f,
 	}
 }
 
-func preOpVerifcation(p, q *Polynomial) bool {
-	if p.f.prime != q.f.prime {
+func preOpVerification(p, q *Polynomial) bool {
+	if p.f.Modulus() != q.f.Modulus() {
 		return false
 	}
 
@@ -52,11 +52,11 @@ func preOpVerifcation(p, q *Polynomial) bool {
 }
 
 func (p *Polynomial) IsZero() bool {
-	return len(p.inner) == 0 || p.inner[0].Value() == 0
+	return len(p.inner) == 0 || p.f.Equals(p.inner[0], 0)
 }
 
 func (p *Polynomial) Add(q *Polynomial) *Polynomial {
-	if !preOpVerifcation(p, q) {
+	if !preOpVerification(p, q) {
 		return nil // this is an error.
 	}
 
@@ -65,77 +65,76 @@ func (p *Polynomial) Add(q *Polynomial) *Polynomial {
 		size = len(q.inner)
 	}
 
-	inner := make([]Elem, size)
+	inner := make([]uint64, size)
 
 	copy(inner, p.inner)
 
 	for i := range q.inner {
-		inner[i] = inner[i].Add(q.inner[i])
+		inner[i] = p.f.Add(inner[i], q.inner[i])
 	}
 
-	return NewPolynomial(inner, p.isCoefficientMod)
+	return NewPolynomial(p.f, inner, p.isCoefficientMod)
 }
 func (p *Polynomial) Sub(q *Polynomial) *Polynomial {
-	if !preOpVerifcation(p, q) {
+	if !preOpVerification(p, q) {
 		return nil // this is an error.
 	}
 
-	negative := make([]Elem, len(q.inner))
+	negative := make([]uint64, len(q.inner))
 	for i, v := range q.inner {
-		negative[i] = v.Neg()
+		negative[i] = p.f.Neg(v)
 	}
 
-	sub := p.Add(NewPolynomial(negative, q.isCoefficientMod))
+	sub := p.Add(NewPolynomial(p.f, negative, q.isCoefficientMod))
 	sub.removeLeadingZeroes()
 
 	return sub
 }
 
 func (p *Polynomial) Mul(q *Polynomial) *Polynomial {
-	if !preOpVerifcation(p, q) {
+	if !preOpVerification(p, q) {
 		return nil
 	}
+	fld := p.f
 
-	var inner []Elem
+	var inner []uint64
 	if p.isCoefficientMod {
-		inner = make([]Elem, len(p.inner))
+		inner = make([]uint64, len(p.inner))
 		for i := range p.inner {
-			inner[i] = p.inner[i].Mul(q.inner[i])
+			inner[i] = fld.Mul(p.inner[i], q.inner[i])
 		}
 	} else {
 		// regular polynomial multiplication O(n^2)
-		inner = make([]Elem, len(p.inner)+len(q.inner)-1)
-		for i := range inner {
-			inner[i] = p.f.ElemFromUint64(0)
-		}
+		inner = make([]uint64, len(p.inner)+len(q.inner)-1)
 
 		for i := range p.inner {
 			for j := range q.inner {
-				tmp := p.inner[i].Mul(q.inner[j])
-				inner[i+j] = inner[i+j].Add(tmp)
+				inner[i+j] = fld.Add(inner[i+j], fld.Mul(p.inner[i], q.inner[j]))
 			}
 		}
 	}
 
-	prod := NewPolynomial(inner, p.isCoefficientMod)
-	prod.removeLeadingZeroes()
+	prod := NewPolynomial(fld, inner, p.isCoefficientMod)
+	if !p.isCoefficientMod {
+		prod.removeLeadingZeroes()
+	}
 
 	return prod
 }
 
-func (p *Polynomial) Eval(x uint64) Elem {
-	xElem := p.f.ElemFromUint64(x)
-	result := p.f.ElemFromUint64(0)
-
+func (p *Polynomial) Eval(x uint64) uint64 {
+	result := uint64(0)
+	fld := p.f
 	// horner's rule:
 	for i := len(p.inner) - 1; i >= 0; i-- {
-		result = p.inner[i].Add(result.Mul(xElem))
+		result = fld.Mul(x, result)
+		result = fld.Add(p.inner[i], result)
 	}
 
 	return result
 }
 func (p *Polynomial) Equals(q *Polynomial) bool {
-	if !preOpVerifcation(p, q) {
+	if !preOpVerification(p, q) {
 		return false
 	}
 
@@ -143,8 +142,9 @@ func (p *Polynomial) Equals(q *Polynomial) bool {
 		return false
 	}
 
+	fld := p.f
 	for i := range p.inner {
-		if !p.inner[i].Equals(q.inner[i]) {
+		if !fld.Equals(p.inner[i], q.inner[i]) {
 			return false
 		}
 	}
@@ -157,9 +157,10 @@ func (p *Polynomial) Equals(q *Polynomial) bool {
 //
 // returns q, r such that p = q*v + r.
 func (p *Polynomial) LongDiv(v *Polynomial) (q *Polynomial, r *Polynomial) {
-	if !preOpVerifcation(p, v) {
+	if !preOpVerification(p, v) {
 		return nil, nil
 	}
+	fld := p.f
 
 	if v.isCoefficientMod {
 		return nil, nil
@@ -168,63 +169,63 @@ func (p *Polynomial) LongDiv(v *Polynomial) (q *Polynomial, r *Polynomial) {
 	n, m := p.Degree(), v.Degree()
 
 	b := v.Copy()
-	tmp := v.LeadCoeff()
-	u := tmp.Inverse()
+	u := fld.Inverse(v.LeadCoeff())
 
 	r = p.Copy()
-	qInner := make([]Elem, n-m+1)
+	qInner := make([]uint64, n-m+1)
 
 	for i := n - m; i >= 0; i-- {
 		if r.Degree() == m+i {
-			qInner[i] = r.LeadCoeff().Mul(u)
+			qInner[i] = fld.Mul(r.LeadCoeff(), u)
 			r = r.Sub(monomialMultPoly(qInner[i], i, b))
 		} else {
-			qInner[i] = p.f.ElemFromUint64(0)
+			qInner[i] = 0
 		}
 	}
 
 	r.removeLeadingZeroes()
 
 	if len(qInner) == 0 {
-		qInner = []Elem{p.f.ElemFromUint64(0)}
+		qInner = []uint64{0}
 	}
 
-	q = NewPolynomial(qInner, false)
+	q = NewPolynomial(fld, qInner, false)
 	q.removeLeadingZeroes()
 
 	return q, r
 }
 
-func monomialMultPoly(ai Elem, deg int, p *Polynomial) *Polynomial {
+func monomialMultPoly(ai uint64, deg int, p *Polynomial) *Polynomial {
 	newDegree := len(p.inner) + deg
+	fld := p.f
+	prod := make([]uint64, newDegree)
 
-	prod := make([]Elem, newDegree)
 	for i := range p.inner {
-		prod[i+deg] = ai.Mul(p.inner[i])
+		prod[i+deg] = fld.Mul(ai, p.inner[i])
 	}
 
 	for i := range deg {
-		prod[i] = p.f.ElemFromUint64(0)
+		prod[i] = 0
 	}
 
-	return NewPolynomial(prod, p.isCoefficientMod)
+	return NewPolynomial(fld, prod, p.isCoefficientMod)
 }
 
 func (p *Polynomial) Degree() int {
 	return p.leadingCoeffPos()
 }
 
-func (p *Polynomial) LeadCoeff() Elem {
+func (p *Polynomial) LeadCoeff() uint64 {
 	if pos := p.leadingCoeffPos(); pos >= 0 {
 		return p.inner[pos]
 	}
 
-	return p.f.ElemFromUint64(0)
+	return 0
 }
 
 func (p *Polynomial) leadingCoeffPos() int {
 	for i := len(p.inner) - 1; i >= 0; i-- {
-		if p.inner[i].Value() != 0 {
+		if p.inner[i] != 0 {
 			return i
 		}
 	}
@@ -239,7 +240,7 @@ func (p *Polynomial) removeLeadingZeroes() {
 
 	lead := p.leadingCoeffPos()
 	if lead < 0 {
-		p.inner = []Elem{p.f.ElemFromUint64(0)}
+		p.inner = []uint64{0}
 
 		return
 	}
@@ -248,12 +249,12 @@ func (p *Polynomial) removeLeadingZeroes() {
 }
 
 func (p *Polynomial) Copy() *Polynomial {
-	innercopy := make([]Elem, len(p.inner))
+	innercopy := make([]uint64, len(p.inner))
 	for i := range p.inner {
-		innercopy[i] = p.inner[i].Copy()
+		innercopy[i] = p.inner[i]
 	}
 
-	return NewPolynomial(innercopy, p.isCoefficientMod)
+	return NewPolynomial(p.f, innercopy, p.isCoefficientMod)
 }
 
 // todo: fix
@@ -261,19 +262,19 @@ func (p *Polynomial) String() string {
 	p.removeLeadingZeroes()
 
 	if len(p.inner) == 1 {
-		return strconv.FormatUint(p.inner[0].Value(), 10)
+		return strconv.FormatUint(p.inner[0], 10)
 	}
 
 	bldr := strings.Builder{}
 
 	for i := len(p.inner) - 1; i >= 0; i-- {
-		if p.inner[i].Value() == 0 {
+		if p.inner[i] == 0 {
 			continue
 		}
 
 		strI := strconv.FormatInt(int64(i), 10)
 
-		strElem := strconv.FormatUint(p.inner[i].Value(), 10)
+		strElem := strconv.FormatUint(p.inner[i], 10)
 		bldr.WriteString(strElem)
 
 		if i != 0 {
@@ -286,13 +287,17 @@ func (p *Polynomial) String() string {
 	return bldr.String()
 }
 
+func makeConstantPoly(f Field, u uint64) *Polynomial {
+	return NewPolynomial(f, []uint64{u}, false)
+}
+
 // returns r= gcd(a,b), x, y such that ax + by = r.
 // where r.Degree() < stopDegree.
 func PartialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial) {
 	if a.Degree() < stopDegree {
 		gcd = a.Copy()
-		x = a.f.constantPolynomial(1)
-		y = a.f.constantPolynomial(0)
+		x = makeConstantPoly(a.f, 1)
+		y = makeConstantPoly(a.f, 0)
 
 		return
 	}
@@ -308,16 +313,17 @@ func PartialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Poly
 func (p *Polynomial) ToSlice() []uint64 {
 	list := make([]uint64, len(p.inner))
 	for i, e := range p.inner {
-		list[i] = e.Value()
+		list[i] = e
 	}
 
 	return list
 }
 
 // returns self for chaining/ fluent interface.
-func (p *Polynomial) MulScalarInPlace(s Elem) *Polynomial {
+func (p *Polynomial) MulScalarInPlace(s uint64) *Polynomial {
+	fld := p.f
 	for i := range p.inner {
-		p.inner[i] = p.inner[i].Mul(s)
+		p.inner[i] = fld.Mul(p.inner[i], s)
 	}
 
 	return p
@@ -325,4 +331,35 @@ func (p *Polynomial) MulScalarInPlace(s Elem) *Polynomial {
 
 func (p *Polynomial) IsCoeffMode() bool {
 	return p.isCoefficientMod
+}
+
+// PolyProductMonicNegRoots computes \prod (x - r_i).
+func PolyProductMonicNegRoots(f Field, roots []uint64) *Polynomial {
+	n := len(roots)
+	if n == 0 {
+		return makeConstantPoly(f, 1)
+	}
+
+	coeffs := make([]uint64, n+1)
+	coeffs[0] = 1
+
+	deg := 0
+	for _, r := range roots {
+		neg := f.Neg(f.Reduce(r)) // -r mod p
+		coeffs[deg+1] = 0
+		for j := deg; j >= 0; j-- {
+			// new[j+1] += old[j] * 1
+			coeffs[j+1] = f.Add(coeffs[j+1], coeffs[j])
+			// new[j]   += old[j] * (-r)
+			coeffs[j] = f.Mul(coeffs[j], neg)
+		}
+		deg++
+	}
+
+	out := make([]uint64, deg+1)
+	for i := 0; i <= deg; i++ {
+		out[i] = coeffs[i]
+	}
+
+	return &Polynomial{f: f, inner: out, isCoefficientMod: false}
 }

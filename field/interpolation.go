@@ -3,10 +3,10 @@ package field
 import "errors"
 
 type Interpolator struct {
-	Field *PrimeField
+	Field Field
 }
 
-func NewInterpolator(field *PrimeField) *Interpolator {
+func NewInterpolator(field Field) *Interpolator {
 	return &Interpolator{Field: field}
 }
 
@@ -32,31 +32,32 @@ func (intr *Interpolator) Interpolate(xs, ys []uint64) (*Polynomial, error) {
 	miSlice := intr.createMiSlice(xs)
 
 	// O(n^2) total cost, since we are multiplying n polynomials of degree 1.
-	m := intr.Field.PolyProduct(miSlice)
+	m := PolyProduct(intr.Field, miSlice)
 
 	liSlice := make([]*Polynomial, len(xs))
 
+	f := intr.Field
 	for i, mi := range miSlice {
 		qi := intr.mDivMi(m, mi) // O(n) fast division.
 		s := qi.Eval(xs[i])
 
 		// this will be the denominator inside the product: \prod_{0\le j \le n, j\ne i} (x_i - u_j)/ (u_i-u_j)
-		sinv := s.Inverse()
+		sinv := f.Inverse(s)
 
 		// O(n):
 		liSlice[i] = qi.MulScalarInPlace(sinv) // l_i(x)
 	}
 
 	for i, li := range liSlice {
-		li.MulScalarInPlace(intr.Field.ElemFromUint64(ys[i]))
+		li.MulScalarInPlace(intr.Field.Reduce(ys[i]))
 	}
 
 	return intr.similarDegreePolySum(liSlice), nil
 }
 
 // PolyProduct multiplies a slice of polynomials.
-func (f *PrimeField) PolyProduct(miSlice []*Polynomial) *Polynomial {
-	m := f.constantPolynomial(1)
+func PolyProduct(f Field, miSlice []*Polynomial) *Polynomial {
+	m := makeConstantPoly(f, 1)
 	for _, mi := range miSlice {
 		m = m.Mul(mi)
 	}
@@ -66,28 +67,29 @@ func (f *PrimeField) PolyProduct(miSlice []*Polynomial) *Polynomial {
 
 // similarDegreePolySum sums polynomials of the same degree.
 func (intr *Interpolator) similarDegreePolySum(polys []*Polynomial) *Polynomial {
-	inner := make([]Elem, len(polys[0].inner))
+	inner := make([]uint64, len(polys[0].inner))
+	fld := intr.Field
 	for _, poly := range polys {
 		for i, coef := range poly.inner {
-			inner[i] = inner[i].Add(coef)
+			inner[i] = fld.Add(inner[i], coef)
 		}
 	}
 
-	return NewPolynomial(inner, false)
+	return NewPolynomial(fld, inner, false)
 
 }
 
 // createMiSlice creates the m_i(x) = (x - x_i) polynomials.
 func (intr *Interpolator) createMiSlice(xs []uint64) []*Polynomial {
 	miSlice := make([]*Polynomial, len(xs))
-
+	f := intr.Field
 	for i, x := range xs {
-		miInner := make([]Elem, 2)
+		miInner := make([]uint64, 2)
 
-		miInner[0] = intr.Field.ElemFromUint64(x).Neg()
-		miInner[1] = intr.Field.ElemFromUint64(1)
+		miInner[0] = f.Neg(f.Reduce(x))
+		miInner[1] = 1
 
-		miSlice[i] = NewPolynomial(miInner, false)
+		miSlice[i] = NewPolynomial(f, miInner, false)
 	}
 
 	return miSlice
@@ -99,18 +101,22 @@ we know that mi is of degree 1, and that we don't have a remainder.
 */
 func (intr *Interpolator) mDivMi(m_, mi_ *Polynomial) *Polynomial {
 	m := m_.Copy()
-	qinner := make([]Elem, len(m.inner)-1)
+	qinner := make([]uint64, len(m.inner)-1)
 	ui := mi_.inner[0]
+
+	f := intr.Field
+	tmp := uint64(0)
 
 	for i := len(m.inner) - 1; i > 0; i-- {
 		qinner[i-1] = m.inner[i]
 		// take m_i = x - ui
 		// remove ui from m:
-		tmp := m.inner[i].Mul(ui).Neg()
-		m.inner[i-1] = tmp.Add(m.inner[i-1])
+
+		tmp = f.Neg(f.Mul(m.inner[i], ui))
+		m.inner[i-1] = f.Add(tmp, m.inner[i-1])
 	}
 
-	return NewPolynomial(qinner, false)
+	return NewPolynomial(f, qinner, false)
 }
 
 func validateInterpolationPoints(xs []uint64, ys []uint64) error {

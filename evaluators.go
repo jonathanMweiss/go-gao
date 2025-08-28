@@ -12,7 +12,7 @@ import (
 // Can be fast evaluation, like NTT, negacyclic-NTT, or just plain polynomial evaluation.
 type EvaluationMap interface {
 	// has access to a specific prime field.
-	PrimeField() *field.PrimeField
+	PrimeField() field.Field
 	// returns the evaluation points for a polynomial of degree n
 	EvaluationPoints(n int) (xs []uint64)
 	EvaluatePolynomial(p *field.Polynomial) (ys []uint64, err error)
@@ -46,7 +46,7 @@ func (e evaluationCache) storePoints(n int, points []uint64) {
 type SlowEvaluator struct {
 	cache *evaluationCache
 
-	field *field.PrimeField
+	f field.Field
 }
 
 func (e *evaluationCache) loadPoints(n int) []uint64 {
@@ -60,9 +60,9 @@ func (e *evaluationCache) loadPoints(n int) []uint64 {
 	return nil
 }
 
-func NewSlowEvaluator(field *field.PrimeField) *SlowEvaluator {
+func NewSlowEvaluator(f field.Field) *SlowEvaluator {
 	return &SlowEvaluator{
-		field: field,
+		f:     f,
 		cache: newEvaluatorCache(),
 	}
 }
@@ -92,8 +92,8 @@ func (e *SlowEvaluator) EvaluationPoints(n int) []uint64 {
 
 var errNotInCoefficientForm = errors.New("polynomial not in coefficient form")
 
-func (e *SlowEvaluator) PrimeField() *field.PrimeField {
-	return e.field
+func (e *SlowEvaluator) PrimeField() field.Field {
+	return e.f
 }
 
 func (e *SlowEvaluator) EvaluatePolynomial(p *field.Polynomial) ([]uint64, error) {
@@ -105,7 +105,7 @@ func (e *SlowEvaluator) EvaluatePolynomial(p *field.Polynomial) ([]uint64, error
 	values := make([]uint64, len(points))
 
 	for i, x := range points {
-		values[i] = p.Eval(x).Value()
+		values[i] = p.Eval(x)
 	}
 
 	return values, nil
@@ -115,16 +115,17 @@ func (e *SlowEvaluator) GenerateLocatorPolynomial(n int) *field.Polynomial {
 	xs := e.EvaluationPoints(n)
 	polys := make([]*field.Polynomial, n)
 
+	f := e.f
 	for i, x := range xs {
 		// create m_i(x) = (x - x_i)
-		coeffs := make([]field.Elem, 2)
-		coeffs[1] = e.field.ElemFromUint64(1)
-		coeffs[0] = e.field.ElemFromUint64(x).Neg()
+		coeffs := make([]uint64, 2)
+		coeffs[1] = 1
+		coeffs[0] = f.Neg(f.Reduce(x))
 
-		polys[i] = field.NewPolynomial(coeffs, false)
+		polys[i] = field.NewPolynomial(f, coeffs, false)
 	}
 
-	return e.field.PolyProduct(polys)
+	return field.PolyProduct(f, polys)
 }
 
 // does not support fast Gao.
