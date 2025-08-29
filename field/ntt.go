@@ -95,6 +95,9 @@ func (pr *DensePolyRing) NttBackward(a *Polynomial) (*Polynomial, error) {
 	}
 
 	a.isNTT = false
+
+	pr.trimTrailingZeros(a)
+
 	return a, nil
 }
 

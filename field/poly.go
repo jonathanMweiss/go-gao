@@ -67,6 +67,7 @@ func (p *Polynomial) IsZero() bool {
 	return true
 }
 
+// Polynomial must be trim from leading zeros.
 func (p *Polynomial) Equals(q *Polynomial) bool {
 	if !preOpVerification(p, q) {
 		return false
@@ -131,7 +132,9 @@ func (p *Polynomial) Copy() *Polynomial {
 }
 
 // todo: fix
-func (p *Polynomial) String() string {
+// Used mainly for testing., copies the polynomial.
+func (p_ *Polynomial) String() string {
+	p := p_.Copy()
 	p.removeLeadingZeroes()
 
 	if len(p.inner) == 1 {

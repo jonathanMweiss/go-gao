@@ -245,12 +245,13 @@ func (r *DensePolyRing) LongDiv(a, b *Polynomial) (q *Polynomial, rem *Polynomia
 
 	n, m := a.Degree(), b.Degree()
 
-	u := fld.Inverse(b.LeadCoeff())
+	u := fld.Inverse(b.LeadCoeff()) // Assumes inverse exists.
 
 	rem = a.Copy()
 	qInner := make([]uint64, n-m+1)
 
 	for i := n - m; i >= 0; i-- {
+		// TODO: keeping the degree in a variable might save time.
 		if rem.Degree() == m+i {
 			qInner[i] = fld.Mul(rem.LeadCoeff(), u)
 			r.SubPoly(rem, r.monomialMultPoly(qInner[i], i, b), rem)
