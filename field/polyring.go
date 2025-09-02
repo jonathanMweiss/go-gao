@@ -22,6 +22,7 @@ type PolyRing interface {
 
 	// Extended Euclidean algorithm.
 	PartialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial)
+	NttPartialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial)
 
 	// Assumes it is a polynomial of a valid degree.
 	NttForward(a *Polynomial) error
@@ -567,4 +568,80 @@ func (r *DensePolyRing) LongDivNTT(a, b *Polynomial) (q, rem *Polynomial) {
 	r.trimTrailingZeros(rem) // ensure deg(rem) < deg(b)
 
 	return q, rem
+}
+
+// choose a threshold by benchmarking on your machine/modulus
+const nttMulThreshold = 256 // ~coeff count where NTT starts winning
+
+// mulFull computes c = a*b in coefficient domain, length len(a)+len(b)-1.
+// It uses mulTrunc with L = total when big enough; otherwise falls back to Mul.
+func (r *DensePolyRing) mulFull(a, b, c *Polynomial) {
+	la, lb := len(a.inner), len(b.inner)
+	if la == 0 || lb == 0 {
+		c.f, c.inner, c.isNTT = r.Field, c.inner[:0], false
+		return
+	}
+	total := la + lb - 1
+	if total >= nttMulThreshold {
+		prod := r.mulTrunc(a, b, total) // NTT under the hood, coeff-domain out
+		// write into c without extra allocs when possible
+		if cap(c.inner) < total {
+			c.inner = make([]uint64, total)
+		} else {
+			c.inner = c.inner[:total]
+		}
+		copy(c.inner, prod.inner)
+		c.f, c.isNTT = r.Field, false
+	} else {
+		// naive dense mul
+		r.MulPoly(a, b, c)
+	}
+}
+
+func (r *DensePolyRing) NttPartialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial) {
+	// Work on local copies ensuring inputs aren't mutated (coeff domain expected).
+	A := a.Copy()
+	B := b.Copy()
+	A.isNTT, B.isNTT = false, false
+
+	// Invariants:
+	//   A = x0*a_orig + y0*b_orig
+	//   B = x1*a_orig + y1*b_orig
+	x0 := makeConstantPoly(r.Field, 1) // 1
+	x1 := makeConstantPoly(r.Field, 0) // 0
+	y0 := makeConstantPoly(r.Field, 0) // 0
+	y1 := makeConstantPoly(r.Field, 1) // 1
+
+	// Reusable temporaries (avoid allocations).
+	tmp1 := &Polynomial{f: r.Field} // holds q*x1 or q*y1
+	tmp2 := &Polynomial{f: r.Field} // holds x0 - q*x1 or y0 - q*y1
+
+	for A.Degree() >= stopDegree {
+		// If B == 0, can't divide further.
+		if B.Degree() < 0 || len(B.inner) == 0 {
+			break
+		}
+
+		// A = q*B + r  (use NTT-accelerated division when large)
+		var q, rrem *Polynomial
+		if len(A.inner)+len(B.inner) >= nttMulThreshold { // simple heuristic
+			q, rrem = r.LongDivNTT(A, B)
+		} else {
+			q, rrem = r.LongDiv(A, B)
+		}
+		A, B = B, rrem // gcd(A,B) = gcd(B,rrem)
+
+		// x update: (x0, x1) = (x1, x0 - q*x1)
+		r.mulFull(q, x1, tmp1)    // tmp1 = q * x1   (NTT if big)
+		r.SubPoly(x0, tmp1, tmp2) // tmp2 = x0 - q*x1
+		x0, x1, tmp2 = x1, tmp2, x0
+
+		// y update: (y0, y1) = (y1, y0 - q*y1)
+		r.mulFull(q, y1, tmp1)    // tmp1 = q * y1   (NTT if big)
+		r.SubPoly(y0, tmp1, tmp2) // tmp2 = y0 - q*y1
+		y0, y1, tmp2 = y1, tmp2, y0
+	}
+
+	// gcd = A, x = x0, y = y0
+	return A, x0, y0
 }

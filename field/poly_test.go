@@ -567,3 +567,41 @@ func BenchmarkLongDivs(b *testing.B) {
 		})
 	}
 }
+
+func FuzzNttPEEA(f *testing.F) {
+	testcases := []uint64{1, 5, 1 << 62, (1 << 63) - 1, 321, 5546, 64, 12236, 75}
+	for _, tc := range testcases {
+		f.Add(tc) // Use f.Add to provide a seed corpus
+	}
+
+	fld, err := NewPrimeField(65537)
+	if err != nil {
+		f.FailNow()
+	}
+
+	pr := NewDensePolyRing(fld)
+
+	f.Fuzz(func(t *testing.T, randomSeed uint64) {
+		// Create random polynomials.
+		maxDegree := 4096
+		randomPolynomialDegree := randomSeed % (uint64(maxDegree) - 1)
+
+		a := randomPolynomial(fld, randomSeed, maxDegree)
+		b := randomPolynomial(fld, randomSeed, int(randomPolynomialDegree))
+
+		for i := 1; i < maxDegree-1; i = i << 1 {
+			partialDegree := i
+
+			gcd, x, y := pr.NttPartialExtendedEuclidean(a, b, partialDegree)
+
+			ax, by, ax_plus_by := &Polynomial{}, &Polynomial{}, &Polynomial{}
+			pr.MulPoly(a, x, ax)
+			pr.MulPoly(b, y, by)
+			pr.AddPoly(ax, by, ax_plus_by)
+
+			if !ax_plus_by.Equals(gcd) {
+				t.Fatalf("expected %v, got %v", ax_plus_by, gcd)
+			}
+		}
+	})
+}
