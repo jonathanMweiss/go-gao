@@ -3,6 +3,7 @@ package field
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -496,5 +497,65 @@ func TestDivNTT(t *testing.T) {
 		quo2, rem2 := pr.LongDivNTT(p.Copy(), q.Copy())
 		a.True(quo1.Equals(quo2))
 		a.True(rem1.Equals(rem2))
+	}
+}
+
+func BenchmarkLongDivs(b *testing.B) {
+	f, err := NewPrimeField(65537)
+	if err != nil {
+		b.Fatal(err)
+	}
+	pr := NewDensePolyRing(f)
+
+	type cfg struct{ degA, degB int }
+	cases := []cfg{
+		// {16, 8},
+		// {64, 32},
+		// {256, 128},
+		// {1024, 512},
+		{2048, 1024}, // add larger sizes as your NTT supports
+	}
+
+	// For stability across runs
+	baseSeed := uint64(time.Now().UnixNano() / 1e6)
+
+	for _, tc := range cases {
+		name := fmt.Sprintf("A=%d_B=%d", tc.degA, tc.degB)
+
+		// Pre-generate inputs once per size (outside timers).
+		p := randomPolynomial(f, baseSeed+12345+uint64(tc.degA), tc.degA)
+		q := randomPolynomial(f, baseSeed+67890+uint64(tc.degB), tc.degB)
+
+		// Sanity check: both paths agree (outside the timer).
+		quo1, rem1 := pr.LongDiv(p.Copy(), q.Copy())
+		quo2, rem2 := pr.LongDivNTT(p.Copy(), q.Copy())
+		if !quo1.Equals(quo2) || !rem1.Equals(rem2) {
+			b.Fatalf("mismatch for %s", name)
+		}
+
+		b.Run(name+"/LongDiv", func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				// Copy so each iteration gets identical inputs
+				_ = pr // avoid inline
+				qq, rr := pr.LongDiv(p.Copy(), q.Copy())
+				// prevent compiler from optimizing away
+				if qq == nil || rr == nil {
+					b.Fatal("nil result")
+				}
+			}
+		})
+
+		b.Run(name+"/LongDivNTT", func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				qq, rr := pr.LongDivNTT(p.Copy(), q.Copy())
+				if qq == nil || rr == nil {
+					b.Fatal("nil result")
+				}
+			}
+		})
 	}
 }
