@@ -6,6 +6,20 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestNTTForward(t *testing.T) {
+	a := assert.New(t)
+	f, err := NewPrimeField(3329)
+	a.NoError(err)
+
+	p := NewPolynomial(f, []uint64{1, 2, 3, 4, 5, 6, 7, 8}, false)
+	expected := []uint64{36, 3240, 3067, 427, 3325, 2894, 254, 81}
+
+	pr := NewDensePolyRing(f)
+	ntt_p, err := pr.NttForward(p)
+	a.NoError(err)
+	a.Equal(expected, ntt_p.ToSlice())
+}
+
 func TestNTTForwardBackward(t *testing.T) {
 	// Test the forward and backward NTT transforms.
 	a := assert.New(t)
