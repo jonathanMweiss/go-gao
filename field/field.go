@@ -126,6 +126,10 @@ func (f *PrimeField) Factors() []uint64 {
 }
 
 func (f *PrimeField) Reduce(val uint64) uint64 {
+	if val < f.prime {
+		return val
+	}
+
 	return val % f.prime
 }
 

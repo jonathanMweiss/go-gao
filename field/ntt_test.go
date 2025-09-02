@@ -15,9 +15,9 @@ func TestNTTForward(t *testing.T) {
 	expected := []uint64{36, 3240, 3067, 427, 3325, 2894, 254, 81}
 
 	pr := NewDensePolyRing(f)
-	ntt_p, err := pr.NttForward(p)
-	a.NoError(err)
-	a.Equal(expected, ntt_p.ToSlice())
+
+	a.NoError(pr.NttForward(p))
+	a.Equal(expected, p.ToSlice())
 }
 
 func TestNTTForwardBackward(t *testing.T) {
@@ -32,11 +32,10 @@ func TestNTTForwardBackward(t *testing.T) {
 
 		p1 := randomPolynomial(f, 12345+uint64(i), cappingDegree)
 		pcpy := p1.Copy()
-		p1, err = pr.NttForward(p1)
-		a.NoError(err)
 
-		p1, err = pr.NttBackward(p1)
-		a.NoError(err)
+		a.NoError(pr.NttForward(p1))
+
+		a.NoError(pr.NttBackward(p1))
 
 		a.True(pcpy.Equals(p1))
 	}
@@ -61,14 +60,12 @@ func TestPolyMult(t *testing.T) {
 		// padding p1 with zeros:
 		p1.inner = append(p1.inner, make([]uint64, degree)...)
 
-		p1, err = pr.NttForward(p1)
-		a.NoError(err)
+		a.NoError(pr.NttForward(p1))
 
 		nttRes := &Polynomial{}
 		pr.MulPoly(p1, p1, nttRes)
 
-		nttRes, err = pr.NttBackward(nttRes)
-		a.NoError(err)
+		a.NoError(pr.NttBackward(nttRes))
 
 		if !regMulRes.Equals(nttRes) {
 			regMulRes.Equals(nttRes)

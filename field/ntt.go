@@ -6,22 +6,22 @@ import "errors"
 // NTTForward converts a coefficient vector to NTT (evaluation-at-powers) form.
 // Length must be a power of two and the field must provide an N-th primitive root.
 // Transforms in-place and returns the same pointer for convenience.
-func (pr *DensePolyRing) NttForward(a *Polynomial) (*Polynomial, error) {
+func (pr *DensePolyRing) NttForward(a *Polynomial) error {
 	if a == nil || len(a.inner) == 0 {
-		return a, nil
+		return nil
 	}
 	if a.isNTT {
-		return a, nil // already in NTT domain
+		return nil // already in NTT domain
 	}
 	n := len(a.inner)
 	if !IsPowerOfTwo(uint64(n)) {
-		return nil, errors.New("NTTForward: length must be a power of two")
+		return errors.New("NTTForward: length must be a power of two")
 	}
 
 	f := pr.GetField()
 	psi, err := f.GetRootOfUnity(uint64(n))
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// Bit-reversal permutation (in-place)
@@ -44,28 +44,28 @@ func (pr *DensePolyRing) NttForward(a *Polynomial) (*Polynomial, error) {
 	}
 
 	a.isNTT = true
-	return a, nil
+	return nil
 }
 
 // NTTBackward converts an NTT (evaluation) vector back to coefficient form.
 // Uses the inverse root and multiplies by n^{-1} at the end.
 // Transforms in-place and returns the same pointer for convenience.
-func (pr *DensePolyRing) NttBackward(a *Polynomial) (*Polynomial, error) {
+func (pr *DensePolyRing) NttBackward(a *Polynomial) error {
 	if a == nil || len(a.inner) == 0 {
-		return a, nil
+		return nil
 	}
 	if !a.isNTT {
-		return a, nil // already in coefficient domain
+		return nil // already in coefficient domain
 	}
 	n := len(a.inner)
 	if !IsPowerOfTwo(uint64(n)) {
-		return nil, errors.New("NTTBackward: length must be a power of two")
+		return errors.New("NTTBackward: length must be a power of two")
 	}
 
 	f := pr.GetField()
 	psi, err := f.GetRootOfUnity(uint64(n))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	psiInv := f.Inverse(psi)
 
@@ -98,7 +98,7 @@ func (pr *DensePolyRing) NttBackward(a *Polynomial) (*Polynomial, error) {
 
 	pr.trimTrailingZeros(a)
 
-	return a, nil
+	return nil
 }
 
 func bitReverseInPlace(xs []uint64) {

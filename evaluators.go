@@ -13,6 +13,8 @@ type EvaluationMap interface {
 	PrimeField() field.Field
 	// returns the evaluation points for a polynomial of degree n
 	EvaluationPoints(n int) (xs []uint64)
+
+	// might change the polynomial
 	EvaluatePolynomial(p *field.Polynomial) (ys []uint64, err error)
 
 	// The locator polynomial for the evaluation points.

@@ -187,8 +187,8 @@ func (gao *Code) Decode(received map[uint64]uint64) ([]uint64, error) {
 
 func (gao *Code) interpolate(ys []uint64, xs []uint64) (*field.Polynomial, error) {
 	if gao.EvaluationMap.isNTT() {
-		g1, err := gao.pr.NttBackward(field.NewPolynomial(gao.pr.GetField(), ys, true))
-		if err != nil {
+		g1 := field.NewPolynomial(gao.pr.GetField(), ys, true)
+		if err := gao.pr.NttBackward(g1); err != nil {
 			return nil, err
 		}
 		return g1, nil

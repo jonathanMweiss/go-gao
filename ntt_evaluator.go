@@ -29,12 +29,11 @@ func (e *NttEvaluator) EvaluationPoints(n int) []uint64 {
 	inner[1] = 1
 	p := field.NewPolynomial(e.pr.GetField(), inner, false)
 
-	res, err := e.pr.NttForward(p)
-	if err != nil {
+	if err := e.pr.NttForward(p); err != nil {
 		panic(err) //. TODO: change API.
 	}
 
-	points = res.ToSlice()
+	points = p.NoCopySlice()
 
 	e.cache.storePoints(n, points)
 
@@ -46,16 +45,11 @@ func (e *NttEvaluator) PrimeField() field.Field {
 }
 
 func (e *NttEvaluator) EvaluatePolynomial(p *field.Polynomial) ([]uint64, error) {
-	if p.IsCoeffMode() {
-		return nil, errNotInCoefficientForm
-	}
-
-	nttp, err := e.pr.NttForward(p)
-	if err != nil {
+	if err := e.pr.NttForward(p); err != nil {
 		return nil, err
 	}
 
-	return nttp.ToSlice(), nil
+	return p.NoCopySlice(), nil
 }
 
 func (e *NttEvaluator) GenerateLocatorPolynomial(n int) *field.Polynomial {

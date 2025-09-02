@@ -22,8 +22,10 @@ type PolyRing interface {
 	PartialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial)
 
 	// Assumes it is a polynomial of a valid degree.
-	NttForward(a *Polynomial) (*Polynomial, error)
-	NttBackward(a *Polynomial) (*Polynomial, error)
+	NttForward(a *Polynomial) error
+	NttBackward(a *Polynomial) error
+
+	LongDivNTT(a, b *Polynomial) (q, r *Polynomial) // returns quotient, remainder
 }
 
 // DensePolyRing implements PolyRing with optional NTT domain for polynomials.
@@ -352,4 +354,199 @@ func PolyProductMonicNegRoots(f Field, roots []uint64) *Polynomial {
 	}
 
 	return &Polynomial{f: f, inner: out, isNTT: false}
+}
+
+// NTTDIV: Used GPT instead of implementing.
+
+// Reverse the top L coefficients: rev_L(f) = x^{L-1} * f(1/x) truncated to L.
+// Reverse the top L coefficients: rev_L(f) = x^{L-1} * f(1/x) truncated to L.
+// Uses the *true* degree (last non-zero) rather than len(inner)-1.
+func (r *DensePolyRing) revTop(f *Polynomial, L int) *Polynomial {
+	out := &Polynomial{f: r.Field, isNTT: false}
+	if L <= 0 {
+		return out
+	}
+	out.inner = make([]uint64, L)
+
+	// Find true degree (ignore trailing zeros)
+	n := len(f.inner) - 1
+	for n >= 0 && r.Equals(f.inner[n], 0) {
+		n--
+	}
+	if n < 0 {
+		// zero polynomial
+		return out
+	}
+
+	// b[i] = a[n - i] if n-i >= 0
+	for i := 0; i < L; i++ {
+		j := n - i
+		if j >= 0 {
+			out.inner[i] = r.Reduce(f.inner[j])
+		} else {
+			out.inner[i] = 0
+		}
+	}
+	return out
+}
+
+func nextPow2(n int) int {
+	if n == 0 {
+		return 1
+	}
+
+	p := 1
+	for p < n {
+		p <<= 1
+	}
+	return p
+}
+
+// Multiply polynomials and then truncate to the lowest L terms.
+// Use NTT under the hood (size = nextPow2(L + L - 1)), then slice [:L].
+func (r *DensePolyRing) mulTrunc(a, b *Polynomial, L int) *Polynomial {
+	out := &Polynomial{f: r.Field, isNTT: false}
+	if L <= 0 {
+		return out
+	}
+	if a == nil || b == nil {
+		out.inner = make([]uint64, 1) // 0
+		return out
+	}
+
+	la := min(len(a.inner), L)
+	lb := min(len(b.inner), L)
+	if la == 0 || lb == 0 {
+		// zero product
+		return out
+	}
+
+	total := la + lb - 1
+	convLen := min(L, total)
+	n := nextPow2(total)
+
+	// Prepare coeff-domain buffers of length n
+	aNTT := &Polynomial{f: r.Field, inner: make([]uint64, n), isNTT: false}
+	bNTT := &Polynomial{f: r.Field, inner: make([]uint64, n), isNTT: false}
+
+	for i := 0; i < la; i++ {
+		aNTT.inner[i] = r.Reduce(a.inner[i])
+	}
+	for i := 0; i < lb; i++ {
+		bNTT.inner[i] = r.Reduce(b.inner[i])
+	}
+
+	// Forward NTT (these should toggle isNTT to true internally)
+	if err := r.NttForward(aNTT); err != nil {
+		panic(err)
+	}
+	if err := r.NttForward(bNTT); err != nil {
+		panic(err)
+	}
+
+	// Pointwise multiply into aNTT
+	for i := 0; i < n; i++ {
+		aNTT.inner[i] = r.Mul(aNTT.inner[i], bNTT.inner[i])
+	}
+
+	// Inverse NTT back to coeff domain (should toggle isNTT back to false)
+	if err := r.NttBackward(aNTT); err != nil {
+		panic(err)
+	}
+
+	// Truncate to the lowest convLen terms and return in coeff domain
+	out.inner = make([]uint64, convLen)
+	copy(out.inner, aNTT.inner[:convLen])
+	// out.isNTT stays false
+	return out
+}
+
+// Series inverse modulo x^k using Newton iteration.
+// Assumes b[0] != 0; returns t such that (b * t) ≡ 1 mod x^k.
+// seriesInverse computes t such that (b * t) ≡ 1 (mod x^k), using Newton iteration.
+// Preconditions:
+//   - b is in coefficient domain (isNTT == false)
+//   - k >= 1
+//   - b.inner[0] != 0 (invertible constant term)
+func (r *DensePolyRing) seriesInverse(b *Polynomial, k int) *Polynomial {
+	if k <= 0 {
+		return &Polynomial{f: r.Field, isNTT: false}
+	}
+	if len(b.inner) == 0 || r.Equals(b.inner[0], 0) {
+		panic("seriesInverse: constant term is zero")
+	}
+
+	b0 := r.Reduce(b.inner[0])
+	t := &Polynomial{f: r.Field, isNTT: false, inner: []uint64{r.Inverse(b0)}}
+	two := r.Reduce(2)
+
+	for l := 1; l < k; {
+		m := l << 1
+		if m > k {
+			m = k
+		}
+
+		// tmp = b*t mod x^m
+		tmp := r.mulTrunc(b, t, m)
+
+		// tmp = 2 - tmp (mod x^m)
+		if len(tmp.inner) < m {
+			z := make([]uint64, m)
+			copy(z, tmp.inner)
+			tmp.inner = z
+		}
+		tmp.inner[0] = r.Sub(two, tmp.inner[0])
+		for i := 1; i < m; i++ {
+			tmp.inner[i] = r.Neg(tmp.inner[i])
+		}
+
+		// t = t * tmp mod x^m
+		t = r.mulTrunc(t, tmp, m)
+		l = m
+	}
+	return t
+}
+
+func (r *DensePolyRing) LongDivNTT(a, b *Polynomial) (q, rem *Polynomial) {
+	if a == nil || b == nil || a.isNTT || b.isNTT {
+		panic("LongDivNTT expects non-nil coefficient-domain polynomials")
+	}
+	n := len(a.inner) - 1
+	m := len(b.inner) - 1
+	if m < 0 {
+		panic("division by zero polynomial")
+	}
+	if n < m {
+		// q = 0, r = a
+		return &Polynomial{f: r.Field, isNTT: false, inner: []uint64{0}}, a.Copy()
+	}
+
+	k := n - m + 1 // quotient length
+
+	// 1) Reverse tops
+	Astar := r.revTop(a, k)   // length k
+	Bstar := r.revTop(b, m+1) // length m+1
+
+	// lead(b) maps to Bstar[0]; must be invertible
+	if len(Bstar.inner) == 0 || r.Equals(Bstar.inner[0], 0) {
+		panic("division by polynomial with zero leading coefficient")
+	}
+
+	// 2) T = (Bstar)^{-1} mod x^k (Newton series inverse)
+	T := r.seriesInverse(Bstar, k) // length k
+
+	// 3) Q* = A* * T mod x^k
+	Qstar := r.mulTrunc(Astar, T, k)
+
+	// 4) q = rev_k(Q*)
+	q = r.revTop(Qstar, k) // coefficient domain
+
+	// 5) rem = a − q*b   <-- this was the bug: must be q*b, not a*b
+	tmp := &Polynomial{f: r.Field, isNTT: false}
+	r.MulPoly(q, b, tmp) // your Mul can use NTT internally if large
+	rem = &Polynomial{f: r.Field, isNTT: false}
+	r.SubPoly(a, tmp, rem)
+	r.trimTrailingZeros(rem) // ensure deg(rem) < deg(b)
+
+	return q, rem
 }

@@ -482,29 +482,19 @@ func BenchmarkPolyProductMonicNegRoots(b *testing.B) {
 	}
 }
 
-func TestMulNTT(t *testing.T) {
-	// a := assert.New(t)
-	// f, err := NewPrimeField(65537)
-	// a.NoError(err)
+func TestDivNTT(t *testing.T) {
+	a := assert.New(t)
+	f, err := NewPrimeField(65537)
+	a.NoError(err)
 
-	// slice := []uint64{1, 2, 3, 4}
+	for _, maxDegree := range []int{16, 64, 256, 1024} {
+		p := randomPolynomial(f, 12345, maxDegree)
+		q := randomPolynomial(f, 67890, maxDegree/2)
 
-	// p1 := NewPolynomial(f, slice, false)
-	// p2 := p1.Copy()
-	// p3 := Polynomial{}
-
-	// pr := NewDensePolyRing(f)
-	// pr.MulPoly(p1, p2, &p3)
-
-	// PadForNTTWithFutureMults(p1)
-	// PadForNTTWithFutureMults(p2)
-
-	// p1ntt := pr.NTT(p1)
-	// p2ntt := pr.NTT(p2)
-
-	// p4 := p3.Copy()
-	// pr.MulPoly(p1ntt, p2ntt, p4)
-
-	// fmt.Println(&p3)
-	// fmt.Println(pr.INTT(p4))
+		pr := NewDensePolyRing(f)
+		quo1, rem1 := pr.LongDiv(p.Copy(), q.Copy())
+		quo2, rem2 := pr.LongDivNTT(p.Copy(), q.Copy())
+		a.True(quo1.Equals(quo2))
+		a.True(rem1.Equals(rem2))
+	}
 }

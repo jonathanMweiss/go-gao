@@ -170,6 +170,10 @@ func (p *Polynomial) ToSlice() []uint64 {
 	return list
 }
 
+func (p *Polynomial) NoCopySlice() []uint64 {
+	return p.inner
+}
+
 func (p *Polynomial) IsCoeffMode() bool {
 	return p.isNTT
 }
