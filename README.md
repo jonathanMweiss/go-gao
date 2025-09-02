@@ -24,11 +24,16 @@ See unit tests for example.
 
 ## Planned Improvements:
 
-- Implementing positive-wrapped and negative-wrapped NTT forward evaluation for fast encoding.
-- Roots of unity fast decoding (Reducing the algorithms runtime from O(n^2 * logn) to O(n^2)).
 - Optimised decoding for erasure only (erasure only faults decrease redundancies).
-- Code optimisations to reduce allocations (and GC).
 - Remove the Lattigo import by implementing a prime factorization algorithm (and switch to the MIT license).
+
+## Remark
+This project used ChatGPT to implement/modify/improve fast 
+polynomial algorithms via Number Theoretic Transform (NTT). 
+NTT-based methods were either optimized from naive versions (e.g., turning
+a recursive NTT into an iterative one with cached roots of unity)
+or generated directly and tested against classical (and written by me) 
+existing implementations (e.g., checking LongDivNTT results against my own implementation of LongDiv).
 
 ## Contributing
 Contributions are welcome! If you’d like to contribute, please open an issue or submit a pull request.
