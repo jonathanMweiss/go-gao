@@ -1,5 +1,7 @@
 package field
 
+import "sync"
+
 type PolyRing interface {
 	Field
 	GetField() Field
@@ -28,13 +30,30 @@ type PolyRing interface {
 	LongDivNTT(a, b *Polynomial) (q, r *Polynomial) // returns quotient, remainder
 }
 
+type twiddleSet struct {
+	// For each stage s (m = 2<<s), fwd[s] (and inv[s]) has length m/2
+	// holding w^j where w = psi^(n/m) for forward, and w = psiInv^(n/m) for inverse.
+	fwd  [][]uint64
+	inv  [][]uint64
+	nInv uint64 // inverse of n (for inverse NTT scaling)
+}
+
 // DensePolyRing implements PolyRing with optional NTT domain for polynomials.
 type DensePolyRing struct {
 	Field
+	mu           sync.RWMutex
+	twiddleCache map[int]*twiddleSet // key: n
+
 }
 
 // NewDensePolyRing constructs a ring over the provided coefficient field.
-func NewDensePolyRing(f Field) PolyRing { return &DensePolyRing{Field: f} }
+func NewDensePolyRing(f Field) PolyRing {
+	return &DensePolyRing{
+		Field:        f,
+		mu:           sync.RWMutex{},
+		twiddleCache: map[int]*twiddleSet{},
+	}
+}
 
 func (r *DensePolyRing) GetField() Field { return r.Field }
 

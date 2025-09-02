@@ -1,101 +1,161 @@
-// improved from recursive variant using gpt.
+// improved from recursive variant(+cache of twiddles) using gpt.
 package field
 
 import "errors"
 
-// NTTForward converts a coefficient vector to NTT (evaluation-at-powers) form.
-// Length must be a power of two and the field must provide an N-th primitive root.
-// Transforms in-place and returns the same pointer for convenience.
+func (pr *DensePolyRing) getTwiddles(n int) (*twiddleSet, error) {
+	pr.mu.RLock()
+	if ts, ok := pr.twiddleCache[n]; ok {
+		pr.mu.RUnlock()
+		return ts, nil
+	}
+	pr.mu.RUnlock()
+
+	// Build outside lock
+	if n <= 1 {
+		ts := &twiddleSet{
+			fwd:  [][]uint64{},
+			inv:  [][]uint64{},
+			nInv: pr.Inverse(uint64(n)),
+		}
+
+		pr.mu.Lock()
+		pr.twiddleCache[n] = ts
+		pr.mu.Unlock()
+
+		return ts, nil
+	}
+	psi, err := pr.GetRootOfUnity(uint64(n))
+	if err != nil {
+		return nil, err
+	}
+	psiInv := pr.Inverse(psi)
+
+	var fwd [][]uint64
+	var inv [][]uint64
+
+	// stages: m = 2,4,8,...,n  => stage index s = 0..(log2(n)-1)
+	for m := 2; m <= n; m = m << 1 {
+		half := m >> 1
+		wmF := pr.Pow(psi, uint64(n/m))    // forward stage root
+		wmI := pr.Pow(psiInv, uint64(n/m)) // inverse stage root
+
+		rowF := make([]uint64, half)
+		rowI := make([]uint64, half)
+
+		wF := uint64(1)
+		wI := uint64(1)
+		for j := 0; j < half; j++ {
+			rowF[j] = wF
+			rowI[j] = wI
+			wF = pr.Mul(wF, wmF)
+			wI = pr.Mul(wI, wmI)
+		}
+
+		fwd = append(fwd, rowF)
+		inv = append(inv, rowI)
+	}
+
+	ts := &twiddleSet{
+		fwd:  fwd,
+		inv:  inv,
+		nInv: pr.Inverse(uint64(n)),
+	}
+
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+	// Another goroutine may have won the race; keep the first one but return ours if we’re first.
+	if existing, ok := pr.twiddleCache[n]; ok {
+		return existing, nil
+	}
+
+	pr.twiddleCache[n] = ts
+
+	return ts, nil
+}
 func (pr *DensePolyRing) NttForward(a *Polynomial) error {
 	if a == nil || len(a.inner) == 0 {
 		return nil
 	}
 	if a.isNTT {
-		return nil // already in NTT domain
+		return nil
 	}
 	n := len(a.inner)
 	if !IsPowerOfTwo(uint64(n)) {
 		return errors.New("NTTForward: length must be a power of two")
 	}
 
-	f := pr.GetField()
-	psi, err := f.GetRootOfUnity(uint64(n))
+	// Bit-reversal permutation (in place; allocation-free)
+	bitReverseInPlace(a.inner)
+
+	// Twiddles per stage
+	ts, err := pr.getTwiddles(n)
 	if err != nil {
 		return err
 	}
 
-	// Bit-reversal permutation (in-place)
-	bitReverseInPlace(a.inner)
-
-	// Iterative breadth-first butterflies (DIT)
-	for m := 2; m <= n; m <<= 1 {
-		// wm = psi^(N/m)  (principal m-th root)
-		wm := f.Pow(psi, uint64(n/m))
+	// Stages: m = 2,4,8,...,n  with precomputed ws per stage.
+	for s, m := 0, 2; m <= n; s, m = s+1, m<<1 {
+		half := m >> 1
+		ws := ts.fwd[s] // length = half
 		for k := 0; k < n; k += m {
-			w := uint64(1)
-			for j := 0; j < m/2; j++ {
+			// breadth-first butterflies
+			for j := 0; j < half; j++ {
 				u := a.inner[k+j]
-				t := f.Mul(w, a.inner[k+j+m/2])
-				a.inner[k+j] = f.Add(u, t)
-				a.inner[k+j+m/2] = f.Sub(u, t)
-				w = f.Mul(w, wm)
+				t := pr.Mul(ws[j], a.inner[k+j+half])
+				a.inner[k+j] = pr.Add(u, t)
+				a.inner[k+j+half] = pr.Sub(u, t)
 			}
 		}
 	}
 
 	a.isNTT = true
+
 	return nil
 }
 
-// NTTBackward converts an NTT (evaluation) vector back to coefficient form.
-// Uses the inverse root and multiplies by n^{-1} at the end.
-// Transforms in-place and returns the same pointer for convenience.
 func (pr *DensePolyRing) NttBackward(a *Polynomial) error {
 	if a == nil || len(a.inner) == 0 {
 		return nil
 	}
 	if !a.isNTT {
-		return nil // already in coefficient domain
+		return nil
 	}
+
 	n := len(a.inner)
 	if !IsPowerOfTwo(uint64(n)) {
 		return errors.New("NTTBackward: length must be a power of two")
 	}
 
-	f := pr.GetField()
-	psi, err := f.GetRootOfUnity(uint64(n))
+	// Bit-reversal permutation (in place)
+	bitReverseInPlace(a.inner)
+
+	// Twiddles per stage
+	ts, err := pr.getTwiddles(n)
 	if err != nil {
 		return err
 	}
-	psiInv := f.Inverse(psi)
 
-	// Bit-reversal permutation (in-place)
-	bitReverseInPlace(a.inner)
-
-	// Iterative butterflies with inverse roots
-	for m := 2; m <= n; m <<= 1 {
-		// wm = (psi^{-1})^(N/m)
-		wm := f.Pow(psiInv, uint64(n/m))
+	// Inverse butterflies use inverse stage twiddles
+	for s, m := 0, 2; m <= n; s, m = s+1, m<<1 {
+		half := m >> 1
+		ws := ts.inv[s]
 		for k := 0; k < n; k += m {
-			w := uint64(1)
-			for j := 0; j < m/2; j++ {
+			for j := 0; j < half; j++ {
 				u := a.inner[k+j]
-				t := f.Mul(w, a.inner[k+j+m/2])
-				a.inner[k+j] = f.Add(u, t)
-				a.inner[k+j+m/2] = f.Sub(u, t)
-				w = f.Mul(w, wm)
+				t := pr.Mul(ws[j], a.inner[k+j+half])
+				a.inner[k+j] = pr.Add(u, t)
+				a.inner[k+j+half] = pr.Sub(u, t)
 			}
 		}
 	}
 
-	// Multiply every entry by n^{-1} to finish the inverse
-	nInv := f.Inverse(uint64(n))
+	// scale by n^{-1}
 	for i := 0; i < n; i++ {
-		a.inner[i] = f.Mul(a.inner[i], nInv)
+		a.inner[i] = pr.Mul(a.inner[i], ts.nInv)
 	}
 
 	a.isNTT = false
-
 	pr.trimTrailingZeros(a)
 
 	return nil
