@@ -3,6 +3,14 @@ package field
 
 import "errors"
 
+type twiddleSet struct {
+	// For each stage s (m = 2<<s), fwd[s] (and inv[s]) has length m/2
+	// holding w^j where w = psi^(n/m) for forward, and w = psiInv^(n/m) for inverse.
+	fwd  [][]uint64
+	inv  [][]uint64
+	nInv uint64 // inverse of n (for inverse NTT scaling)
+}
+
 func (pr *DensePolyRing) getTwiddles(n int) (*twiddleSet, error) {
 	pr.mu.RLock()
 	if ts, ok := pr.twiddleCache[n]; ok {

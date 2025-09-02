@@ -19,6 +19,7 @@ type PolyRing interface {
 
 	// Creates quotient and remainder
 	LongDiv(a, b *Polynomial) (q *Polynomial, r *Polynomial) // returns quotient, remainder
+	LongDivNTT(a, b *Polynomial) (q, r *Polynomial)          // returns quotient, remainder
 
 	// Extended Euclidean algorithm.
 	PartialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial)
@@ -27,16 +28,6 @@ type PolyRing interface {
 	// Assumes it is a polynomial of a valid degree.
 	NttForward(a *Polynomial) error
 	NttBackward(a *Polynomial) error
-
-	LongDivNTT(a, b *Polynomial) (q, r *Polynomial) // returns quotient, remainder
-}
-
-type twiddleSet struct {
-	// For each stage s (m = 2<<s), fwd[s] (and inv[s]) has length m/2
-	// holding w^j where w = psi^(n/m) for forward, and w = psiInv^(n/m) for inverse.
-	fwd  [][]uint64
-	inv  [][]uint64
-	nInv uint64 // inverse of n (for inverse NTT scaling)
 }
 
 // DensePolyRing implements PolyRing with optional NTT domain for polynomials.
@@ -44,7 +35,6 @@ type DensePolyRing struct {
 	Field
 	mu           sync.RWMutex
 	twiddleCache map[int]*twiddleSet // key: n
-
 }
 
 // NewDensePolyRing constructs a ring over the provided coefficient field.
