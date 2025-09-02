@@ -500,6 +500,11 @@ func TestDivNTT(t *testing.T) {
 	}
 }
 
+/*
+BenchmarkLongDivs/A=2048_B=1024/LongDiv-10         	      88	  13087283 ns/op	13364703 B/op	    2056 allocs/op
+BenchmarkLongDivs/A=2048_B=1024/LongDivNTT
+BenchmarkLongDivs/A=2048_B=1024/LongDivNTT-10      	     356	   3374486 ns/op	  441755 B/
+*/
 func BenchmarkLongDivs(b *testing.B) {
 	f, err := NewPrimeField(65537)
 	if err != nil {
@@ -513,7 +518,10 @@ func BenchmarkLongDivs(b *testing.B) {
 		// {64, 32},
 		// {256, 128},
 		// {1024, 512},
-		{2048, 1024}, // add larger sizes as your NTT supports
+		// {2048, 1024}, // add larger sizes as your NTT supports
+		// {4096, 128},
+		// {8192, 256},
+		// {16384, 512},
 	}
 
 	// For stability across runs

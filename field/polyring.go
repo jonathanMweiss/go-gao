@@ -541,11 +541,10 @@ func (r *DensePolyRing) LongDivNTT(a, b *Polynomial) (q, rem *Polynomial) {
 	// 4) q = rev_k(Q*)
 	q = r.revTop(Qstar, k) // coefficient domain
 
-	// 5) rem = a − q*b   <-- this was the bug: must be q*b, not a*b
-	tmp := &Polynomial{f: r.Field, isNTT: false}
-	r.MulPoly(q, b, tmp) // your Mul can use NTT internally if large
+	// 5) rem = a − q*b
+	prod := r.mulTrunc(q, b, n+1) // full product length (deg = n)
 	rem = &Polynomial{f: r.Field, isNTT: false}
-	r.SubPoly(a, tmp, rem)
+	r.SubPoly(a, prod, rem)  // coeff-domain subtraction
 	r.trimTrailingZeros(rem) // ensure deg(rem) < deg(b)
 
 	return q, rem
