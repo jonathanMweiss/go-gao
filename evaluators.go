@@ -7,8 +7,6 @@ import (
 	"github.com/jonathanmweiss/go-gao/field"
 )
 
-// TODO: Implement FAST evaluation using Negacyclic NTT.
-
 // Can be fast evaluation, like NTT, negacyclic-NTT, or just plain polynomial evaluation.
 type EvaluationMap interface {
 	// has access to a specific prime field.
@@ -24,8 +22,6 @@ type EvaluationMap interface {
 
 	isNTT() bool
 }
-
-// can be fast, can be slow.
 
 type evaluationCache struct {
 	sync.Locker
@@ -43,6 +39,7 @@ func (e evaluationCache) storePoints(n int, points []uint64) {
 	e.degreeToPoints[n] = points
 }
 
+// Not Tested. but can support non powers of 2 for $n$ param.
 type SlowEvaluator struct {
 	cache *evaluationCache
 

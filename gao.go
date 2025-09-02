@@ -169,7 +169,7 @@ func (gao *Code) Decode(received map[uint64]uint64) ([]uint64, error) {
 		ys[i] = received[x] // according to the order of the EvaluationMap's EvaluationPoints.
 	}
 
-	g1, err := gao.interpolator.Interpolate(xs, ys)
+	g1, err := gao.interpolate(ys, xs)
 	if err != nil {
 		return nil, err
 	}
@@ -183,4 +183,21 @@ func (gao *Code) Decode(received map[uint64]uint64) ([]uint64, error) {
 	}
 
 	return f.ToSlice(), nil
+}
+
+func (gao *Code) interpolate(ys []uint64, xs []uint64) (*field.Polynomial, error) {
+	if gao.EvaluationMap.isNTT() {
+		g1, err := gao.pr.NttBackward(field.NewPolynomial(gao.pr.GetField(), ys, true))
+		if err != nil {
+			return nil, err
+		}
+		return g1, nil
+	}
+
+	g1, err := gao.interpolator.Interpolate(xs, ys)
+	if err != nil {
+		return nil, err
+	}
+
+	return g1, nil
 }
