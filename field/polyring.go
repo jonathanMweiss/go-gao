@@ -460,7 +460,7 @@ func (r *DensePolyRing) mulTrunc(a, b *Polynomial, L int) *Polynomial {
 	}
 
 	// Inverse NTT back to coeff domain (should toggle isNTT back to false)
-	if err := r.NttBackward(aNTT); err != nil {
+	if err := r.nttBackwardNoTrim(aNTT); err != nil {
 		panic(err)
 	}
 

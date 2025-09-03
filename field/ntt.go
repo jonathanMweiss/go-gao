@@ -123,11 +123,20 @@ func (pr *DensePolyRing) NttForward(a *Polynomial) error {
 }
 
 func (pr *DensePolyRing) NttBackward(a *Polynomial) error {
+	if err := pr.nttBackwardNoTrim(a); err != nil {
+		return err
+	}
+	pr.trimTrailingZeros(a)
+
+	return nil
+}
+
+func (pr *DensePolyRing) nttBackwardNoTrim(a *Polynomial) error {
 	if a == nil || len(a.inner) == 0 {
 		return nil
 	}
 	if !a.isNTT {
-		return nil
+		return errors.New("newMethod: polynomial is not in NTT form")
 	}
 
 	n := len(a.inner)
@@ -164,8 +173,6 @@ func (pr *DensePolyRing) NttBackward(a *Polynomial) error {
 	}
 
 	a.isNTT = false
-	pr.trimTrailingZeros(a)
-
 	return nil
 }
 
