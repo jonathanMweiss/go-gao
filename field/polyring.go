@@ -515,6 +515,15 @@ func (r *DensePolyRing) seriesInverse(b *Polynomial, k int) *Polynomial {
 	return t
 }
 
+// LongDivNTT follows `Modern Computer Algebra` by Joachim von zur Gathen and Jürgen Gerhard, section 9.1.
+//
+// The algorithm applies q' = Rev(a.Copy(),len(a)) * Rev(b.Copy(),len(b)) ^{-1}.
+// Then it computes Rev(q',len(a)-len(b)+1) to compute the quotient.
+// To compute the remainder rem it follows the relation a = q*b+rem. Namely, rem = a-q*b.
+// Rev(*,*) has O(n) complexity. there are finite number of multiplications, and each uses NTT
+// thus O(nlogn) complexity.
+// The inverse of Rev(b.Copy(),len(b)) is computed via Newton iteration in the method seriesInverse
+// with total complexity of O(nlogn).
 func (r *DensePolyRing) LongDivNTT(a, b *Polynomial) (q, rem *Polynomial) {
 	if a == nil || b == nil || a.isNTT || b.isNTT {
 		panic("LongDivNTT expects non-nil coefficient-domain polynomials")
