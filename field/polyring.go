@@ -437,11 +437,11 @@ func (r *DensePolyRing) mulTrunc(a, b *Polynomial, L int) *Polynomial {
 
 	// Prepare coeff-domain buffers of length n
 	aNTT := &Polynomial{f: r.Field, inner: make([]uint64, n), isNTT: false}
-	bNTT := &Polynomial{f: r.Field, inner: make([]uint64, n), isNTT: false}
-
 	for i := 0; i < la; i++ {
 		aNTT.inner[i] = r.Reduce(a.inner[i])
 	}
+
+	bNTT := &Polynomial{f: r.Field, inner: make([]uint64, n), isNTT: false}
 	for i := 0; i < lb; i++ {
 		bNTT.inner[i] = r.Reduce(b.inner[i])
 	}
@@ -465,9 +465,7 @@ func (r *DensePolyRing) mulTrunc(a, b *Polynomial, L int) *Polynomial {
 	}
 
 	// Truncate to the lowest convLen terms and return in coeff domain
-	out.inner = make([]uint64, convLen)
-	copy(out.inner, aNTT.inner[:convLen])
-	// out.isNTT stays false
+	out.inner = aNTT.inner[:convLen]
 	return out
 }
 
@@ -560,7 +558,6 @@ func (r *DensePolyRing) LongDivNTT(a, b *Polynomial) (q, rem *Polynomial) {
 	return q, rem
 }
 
-// choose a threshold by benchmarking on your machine/modulus
 const nttMulThreshold = 256 // ~coeff count where NTT starts winning
 
 // mulFull computes c = a*b in coefficient domain, length len(a)+len(b)-1.
