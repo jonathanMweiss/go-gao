@@ -1,6 +1,7 @@
 package gao
 
 import (
+	"fmt"
 	"math/rand"
 	"testing"
 	"time"
@@ -136,5 +137,64 @@ func TestCorruptions(t *testing.T) {
 		a.NoError(err)
 
 		a.Equal(makeTestSlice(tc.k), decoded)
+	}
+}
+
+func BenchmarkDecode(b *testing.B) {
+	f, err := field.NewPrimeField(65537)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ks := []int{1 << 9, 1 << 10, 1 << 12, 1 << 13}
+
+	evaluators := []struct {
+		name string
+		eval EvaluationMap
+	}{
+		{"slow", NewSlowEvaluator(f)},
+		{"ntt", NewNttEvaluator(f)},
+	}
+
+	for _, k := range ks {
+		k := k // capture
+		for _, ev := range evaluators {
+			ev := ev // capture
+			n := k * 4
+			name := fmt.Sprintf("eval=%s/n=%d/k=%d", ev.name, n, k)
+			b.Run(name, func(b *testing.B) {
+				// --- Setup (not timed) ---
+
+				prms, err := NewCodeParameters(ev.eval, n, k)
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				gao := NewCodeGao(prms)
+
+				slc := makeTestSlice(k)
+
+				encoding, err := gao.Encode(slc)
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				// If Decode mutates the input slice, uncomment to protect the source:
+				// mkCopy := func(src []Elem) []Elem { dst := make([]Elem, len(src)); copy(dst, src); return dst }
+
+				// Rough throughput metric (bytes per op) if Elem is a byte-like type.
+				// Adjust if your element size differs.
+				b.SetBytes(int64(len(encoding)))
+				b.ReportAllocs()
+				b.ResetTimer()
+
+				for i := 0; i < b.N; i++ {
+					// enc := mkCopy(encoding) // use if Decode modifies input
+					if _, err := gao.Decode(encoding); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
 	}
 }

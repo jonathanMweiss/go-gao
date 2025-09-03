@@ -145,38 +145,22 @@ var ErrTooManyPoints = errors.New("too many evaluated points")
 var ErrDecoding = errors.New("decoding error")
 
 func (gao *Code) Decode(received map[uint64]uint64) ([]uint64, error) {
-	// fill missing points with 0.
-	if len(received) > gao.N() {
-		return nil, ErrTooManyPoints
-	}
-
-	numMissing := 0
-
-	xs := gao.EvaluationMap.EvaluationPoints(gao.N())
-	for _, x := range xs {
-		if _, ok := received[x]; !ok {
-			received[x] = 0
-			numMissing += 1
-		}
-	}
-
-	if numMissing > gao.MaxErrors() {
-		return nil, ErrTooManyMissingPoints
-	}
-
-	ys := make([]uint64, gao.N())
-	for i, x := range xs {
-		ys[i] = received[x] // according to the order of the EvaluationMap's EvaluationPoints.
-	}
-
-	g1, err := gao.interpolate(ys, xs)
+	// fill missing evaluated points with 0.
+	xs, ys, err := gao.prepareDecoding(received)
 	if err != nil {
 		return nil, err
 	}
 
-	pr := gao.pr
-	g, _, v := pr.PartialExtendedEuclidean(gao.g0, g1, gao.stopDegree)
-	f, r := pr.LongDiv(g, v)
+	var f, r *field.Polynomial
+	if gao.EvaluationMap.isNTT() {
+		f, r, err = gao.decodeNTT(ys, xs)
+	} else {
+		f, r, err = gao.decodeGeneric(ys, xs)
+	}
+
+	if err != nil {
+		return nil, err
+	}
 
 	if !r.IsZero() || f.Degree() > gao.K() {
 		return nil, ErrDecoding
@@ -185,19 +169,60 @@ func (gao *Code) Decode(received map[uint64]uint64) ([]uint64, error) {
 	return f.ToSlice(), nil
 }
 
-func (gao *Code) interpolate(ys []uint64, xs []uint64) (*field.Polynomial, error) {
-	if gao.EvaluationMap.isNTT() {
-		g1 := field.NewPolynomial(gao.pr.GetField(), ys, true)
-		if err := gao.pr.NttBackward(g1); err != nil {
-			return nil, err
-		}
-		return g1, nil
+/*
+prepare the decoding process by filling in missing evaluated points with zeros.
+*/
+func (gao *Code) prepareDecoding(toDecode map[uint64]uint64) ([]uint64, []uint64, error) {
+	if len(toDecode) > gao.N() {
+		return nil, nil, ErrTooManyPoints
 	}
 
+	numMissing := 0
+
+	xs := gao.EvaluationMap.EvaluationPoints(gao.N())
+	for _, x := range xs {
+		if _, ok := toDecode[x]; !ok {
+			toDecode[x] = 0
+			numMissing += 1
+		}
+	}
+
+	if numMissing > gao.MaxErrors() {
+		return nil, nil, ErrTooManyMissingPoints
+	}
+
+	ys := make([]uint64, gao.N())
+	for i, x := range xs {
+		ys[i] = toDecode[x] // according to the order of the EvaluationMap's EvaluationPoints.
+	}
+
+	return xs, ys, nil
+}
+
+func (gao *Code) decodeGeneric(ys []uint64, xs []uint64) (*field.Polynomial, *field.Polynomial, error) {
 	g1, err := gao.interpolator.Interpolate(xs, ys)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return g1, nil
+	pr := gao.pr
+
+	g, _, v := pr.PartialExtendedEuclidean(gao.g0, g1, gao.stopDegree)
+	f, r := pr.LongDiv(g, v)
+
+	return f, r, nil
+}
+
+func (gao *Code) decodeNTT(ys []uint64, xs []uint64) (*field.Polynomial, *field.Polynomial, error) {
+	g1 := field.NewPolynomial(gao.pr.GetField(), ys, true)
+	if err := gao.pr.NttBackward(g1); err != nil {
+		return nil, nil, err
+	}
+
+	pr := gao.pr
+
+	g, _, v := pr.NttPartialExtendedEuclidean(gao.g0, g1, gao.stopDegree)
+	f, r := pr.LongDivNTT(g, v)
+
+	return f, r, nil
 }

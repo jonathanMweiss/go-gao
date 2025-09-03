@@ -27,7 +27,7 @@ See unit tests for example.
 - Optimised decoding for erasure only (erasure only faults decrease redundancies).
 - Remove the Lattigo import by implementing a prime factorization algorithm (and switch to the MIT license).
 
-## Remark
+## Disclosure
 This project used ChatGPT to implement/modify/improve fast 
 polynomial algorithms via Number Theoretic Transform (NTT). 
 NTT-based methods were either optimized from naive versions (e.g., turning
