@@ -140,6 +140,47 @@ func TestCorruptions(t *testing.T) {
 	}
 }
 
+func TestSliceEncodeDecode(t *testing.T) {
+	a := assert.New(t)
+	f, err := field.NewPrimeField(65537)
+	a.NoError(err)
+
+	testCases := []testCase{
+		{NewSlowEvaluator(f), 18, 5},
+		{NewNttEvaluator(f), 16, 4},
+	}
+
+	for _, tc := range testCases {
+		prms, err := NewCodeParameters(tc.EvaluationMap, tc.n, tc.k)
+		a.NoError(err)
+
+		gao := NewCodeGao(prms)
+		originalData := makeTestSlice(tc.k)
+
+		// Test EncodeToSlice and DecodeFromSlice with no corruptions
+		encodedSlice, err := gao.EncodeToSlice(originalData)
+		a.NoError(err)
+		a.Len(encodedSlice, tc.n)
+
+		encodedCopy := make([]uint64, len(encodedSlice))
+		copy(encodedCopy, encodedSlice)
+
+		decodedSlice, err := gao.DecodeFromSlice(encodedCopy)
+		a.NoError(err)
+		a.Equal(originalData, decodedSlice)
+
+		// Test with corruptions
+		corruptedSlice := make([]uint64, len(encodedSlice))
+		copy(corruptedSlice, encodedSlice)
+		for i := 0; i < prms.MaxErrors(); i++ {
+			corruptedSlice[i] = rand.Uint64()
+		}
+		decodedFromCorrupted, err := gao.DecodeFromSlice(corruptedSlice)
+		a.NoError(err)
+		a.Equal(originalData, decodedFromCorrupted)
+	}
+}
+
 func BenchmarkDecode(b *testing.B) {
 	f, err := field.NewPrimeField(65537)
 	if err != nil {

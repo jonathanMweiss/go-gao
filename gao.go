@@ -102,29 +102,7 @@ var ErrDataTooLarge = errors.New("data too large")
 var ErrDataElementsTooLarge = errors.New("data elements too large")
 
 func (gao *Code) Encode(data []uint64) (map[uint64]uint64, error) {
-	f := gao.PrimeField()
-
-	q := f.Modulus()
-	for _, d := range data {
-		if d >= q {
-			return nil, ErrDataElementsTooLarge
-		}
-	}
-
-	// check data length.
-	if len(data) > gao.K() {
-		return nil, ErrDataTooLarge
-	}
-
-	// pad:
-	paddedData := make([]uint64, gao.N())
-	copy(paddedData, data)
-
-	// create polynomial from data.
-	p := field.NewPolynomial(f, paddedData, false)
-	// evaluate polynomial at n points.
-
-	ys, err := gao.EvaluationMap.EvaluatePolynomial(p)
+	ys, err := gao.EncodeToSlice(data)
 	if err != nil {
 		return nil, err
 	}
@@ -151,6 +129,11 @@ func (gao *Code) Decode(received map[uint64]uint64) ([]uint64, error) {
 		return nil, err
 	}
 
+	return gao.sliceDecode(xs, ys)
+}
+
+func (gao *Code) sliceDecode(xs []uint64, ys []uint64) ([]uint64, error) {
+	var err error
 	var f, r *field.Polynomial
 	if gao.EvaluationMap.isNTT() {
 		f, r, err = gao.decodeNTT(ys, xs)
@@ -225,4 +208,45 @@ func (gao *Code) decodeNTT(ys []uint64, xs []uint64) (*field.Polynomial, *field.
 	f, r := pr.DivNTT(g, v)
 
 	return f, r, nil
+}
+
+func (gao *Code) EncodeToSlice(data []uint64) ([]uint64, error) {
+	f := gao.PrimeField()
+
+	q := f.Modulus()
+	for _, d := range data {
+		if d >= q {
+			return nil, ErrDataElementsTooLarge
+		}
+	}
+
+	// check data length.
+	if len(data) > gao.K() {
+		return nil, ErrDataTooLarge
+	}
+
+	// pad:
+	paddedData := make([]uint64, gao.N())
+	copy(paddedData, data)
+
+	// create polynomial from data.
+	p := field.NewPolynomial(f, paddedData, false)
+	// evaluate polynomial at n points.
+
+	ys, err := gao.EvaluationMap.EvaluatePolynomial(p)
+	if err != nil {
+		return nil, err
+	}
+
+	return ys, nil
+}
+
+// Notice: This might change the input slice (depending on the EvaluationMap used).
+func (gao *Code) DecodeFromSlice(ys []uint64) ([]uint64, error) {
+	xs := gao.EvaluationMap.EvaluationPoints(gao.N())
+	if len(xs) != len(ys) {
+		return nil, errors.New("mismatch between number of evaluation points and number of values")
+	}
+
+	return gao.sliceDecode(xs, ys)
 }
