@@ -32,7 +32,7 @@ type PolyRing interface {
 	NttPartialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial)
 }
 
-const nttMulThreshold = 256 // ~coeff count where NTT starts winning
+const nttMulThreshold = 16 // ~coeff count where NTT starts winning
 
 // DensePolyRing implements PolyRing with optional NTT domain for polynomials.
 type DensePolyRing struct {
