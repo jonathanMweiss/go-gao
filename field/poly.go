@@ -175,5 +175,5 @@ func (p *Polynomial) NoCopySlice() []uint64 {
 }
 
 func (p *Polynomial) IsCoeffMode() bool {
-	return p.isNTT
+	return !p.isNTT
 }

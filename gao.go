@@ -92,8 +92,8 @@ func NewCodeGao(c CodeParams) *Code {
 func (gao *Code) Copy() *Code {
 	return &Code{
 		CodeParams:   gao.CodeParams,
-		g0:           gao.g0.Copy(),
-		interpolator: field.NewInterpolator(gao.pr),
+		pr:           gao.pr,
+		interpolator: gao.interpolator,
 		stopDegree:   gao.stopDegree,
 	}
 }

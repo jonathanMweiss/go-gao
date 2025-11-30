@@ -96,7 +96,7 @@ func (e *SlowEvaluator) PrimeField() field.Field {
 }
 
 func (e *SlowEvaluator) EvaluatePolynomial(p *field.Polynomial) ([]uint64, error) {
-	if p.IsCoeffMode() {
+	if !p.IsCoeffMode() {
 		return nil, errNotInCoefficientForm
 	}
 
