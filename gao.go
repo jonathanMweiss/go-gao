@@ -196,7 +196,7 @@ func (gao *Code) decodeGeneric(ys []uint64, xs []uint64) (*field.Polynomial, *fi
 	return f, r, nil
 }
 
-func (gao *Code) decodeNTT(ys []uint64, xs []uint64) (*field.Polynomial, *field.Polynomial, error) {
+func (gao *Code) decodeNTT(ys, xs []uint64) (*field.Polynomial, *field.Polynomial, error) {
 	g1 := field.NewPolynomial(gao.pr.GetField(), ys, true)
 	if err := gao.pr.NttBackward(g1); err != nil {
 		return nil, nil, err
