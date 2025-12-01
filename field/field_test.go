@@ -135,6 +135,49 @@ func (f *PrimeField) PowSlow(e, p uint64) uint64 {
 	)
 }
 
+var benchNegSink uint64
+
+// NegBranched is the original implementation with an explicit branch.
+func (f *PrimeField) NegBranched(e uint64) uint64 {
+	if e == 0 {
+		return 0
+	}
+	return (f.prime - e)
+}
+
+func (f *PrimeField) NegBranchless(e uint64) uint64 {
+	res := f.prime - e
+	if e == 0 {
+		res = 0
+	}
+	return res
+}
+
+// NegBranchless is the implementation that relies on the compiler
+// to generate a branchless conditional move.
+// concluded results: it is indeed faster, see below.
+// BenchmarkNeg/Branched-12         	1000000000	         0.3091 ns/op	       0 B/op	       0 allocs/op
+// BenchmarkNeg/Branchless-12       	1000000000	         0.2296 ns/op	       0 B/op	       0 allocs/op
+func BenchmarkNeg(b *testing.B) {
+	f, err := NewPrimeField(9191248642791733759)
+	if err != nil {
+		b.Fatal(err)
+	}
+	pf := f.(*PrimeField)
+
+	b.Run("Branched", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			benchNegSink = pf.NegBranched(uint64(i))
+		}
+	})
+
+	b.Run("Branchless", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			benchNegSink = pf.NegBranchless(uint64(i))
+		}
+	})
+}
+
 func BenchmarkPowMod(b *testing.B) {
 	f, err := NewPrimeField(9191248642791733759)
 	if err != nil {

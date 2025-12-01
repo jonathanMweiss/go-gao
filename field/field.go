@@ -194,11 +194,11 @@ func (f *PrimeField) Inverse(e uint64) uint64 {
 }
 
 func (f *PrimeField) Neg(e uint64) uint64 {
+	res := f.prime - e
 	if e == 0 {
-		return 0
+		res = 0
 	}
-
-	return (f.prime - e)
+	return res
 }
 
 func (f *PrimeField) Sub(a, b uint64) uint64 {
