@@ -82,6 +82,8 @@ func (pr *DensePolyRing) getTwiddles(n int) (*twiddleSet, error) {
 
 	return ts, nil
 }
+
+// Forwards NTT transform of a polynomial a in place. If polynomial is already in NTT form, no operation is performed.
 func (pr *DensePolyRing) NttForward(a *Polynomial) error {
 	if a == nil || len(a.inner) == 0 {
 		return nil

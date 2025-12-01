@@ -341,37 +341,6 @@ func (r *DensePolyRing) PartialExtendedEuclidean(a, b *Polynomial, stopDegree in
 	return A, x0, y0
 }
 
-// PolyProductMonicNegRoots computes \prod (x - r_i).
-func PolyProductMonicNegRoots(f Field, roots []uint64) *Polynomial {
-	n := len(roots)
-	if n == 0 {
-		return makeConstantPoly(f, 1)
-	}
-
-	coeffs := make([]uint64, n+1)
-	coeffs[0] = 1
-
-	deg := 0
-	for _, r := range roots {
-		neg := f.Neg(f.Reduce(r)) // -r mod p
-		coeffs[deg+1] = 0
-		for j := deg; j >= 0; j-- {
-			// new[j+1] += old[j] * 1
-			coeffs[j+1] = f.Add(coeffs[j+1], coeffs[j])
-			// new[j]   += old[j] * (-r)
-			coeffs[j] = f.Mul(coeffs[j], neg)
-		}
-		deg++
-	}
-
-	out := make([]uint64, deg+1)
-	for i := 0; i <= deg; i++ {
-		out[i] = coeffs[i]
-	}
-
-	return &Polynomial{f: f, inner: out, isNTT: false}
-}
-
 // Reverse the top L coefficients: rev_L(f) = x^{L-1} * f(1/x) truncated to L.
 // Reverse the top L coefficients: rev_L(f) = x^{L-1} * f(1/x) truncated to L.
 // Uses the *true* degree (last non-zero) rather than len(inner)-1.
@@ -432,10 +401,7 @@ func (r *DensePolyRing) MulNTT(a, b, c *Polynomial) {
 	if a.isNTT && b.isNTT {
 		n := len(a.inner)
 		ensureLen(c, n)
-		f := r.Field
-		for i := 0; i < n; i++ {
-			c.inner[i] = f.Mul(a.inner[i], b.inner[i])
-		}
+		r.pointwiseMult(a, b, c)
 
 		c.f = r.Field
 		c.isNTT = true
@@ -450,6 +416,13 @@ func (r *DensePolyRing) MulNTT(a, b, c *Polynomial) {
 
 	c.inner = prod.inner
 	c.f, c.isNTT = r.Field, false
+}
+
+func (r *DensePolyRing) pointwiseMult(a, b, c *Polynomial) {
+	f := r.Field
+	for i := range c.inner {
+		c.inner[i] = f.Mul(a.inner[i], b.inner[i])
+	}
 }
 
 // Multiply polynomials and then truncate to the lowest L terms.
@@ -477,14 +450,10 @@ func (r *DensePolyRing) mulTrunc(a, b *Polynomial, L int) *Polynomial {
 
 	// Prepare coeff-domain buffers of length n
 	aNTT := &Polynomial{f: r.Field, inner: make([]uint64, n), isNTT: false}
-	for i := 0; i < la; i++ {
-		aNTT.inner[i] = r.Reduce(a.inner[i])
-	}
+	copy(aNTT.inner, a.inner[:la])
 
 	bNTT := &Polynomial{f: r.Field, inner: make([]uint64, n), isNTT: false}
-	for i := 0; i < lb; i++ {
-		bNTT.inner[i] = r.Reduce(b.inner[i])
-	}
+	copy(bNTT.inner, b.inner[:lb])
 
 	// Forward NTT (these should toggle isNTT to true internally)
 	if err := r.NttForward(aNTT); err != nil {
@@ -494,14 +463,10 @@ func (r *DensePolyRing) mulTrunc(a, b *Polynomial, L int) *Polynomial {
 		panic(err)
 	}
 
-	f := r.Field
-
 	// Pointwise multiply into aNTT
-	for i := 0; i < n; i++ {
-		aNTT.inner[i] = f.Mul(aNTT.inner[i], bNTT.inner[i])
-	}
+	r.pointwiseMult(aNTT, bNTT, aNTT)
 
-	// Inverse NTT back to coeff domain (should toggle isNTT back to false)
+	// Inverse NTT back to coeff domain
 	if err := r.nttBackwardNoTrim(aNTT); err != nil {
 		panic(err)
 	}

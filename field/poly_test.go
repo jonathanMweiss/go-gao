@@ -425,6 +425,37 @@ func makeRoots(n int) []uint64 {
 	return roots
 }
 
+// polyProductMonicNegRoots computes \prod (x - r_i).
+func polyProductMonicNegRoots(f Field, roots []uint64) *Polynomial {
+	n := len(roots)
+	if n == 0 {
+		return makeConstantPoly(f, 1)
+	}
+
+	coeffs := make([]uint64, n+1)
+	coeffs[0] = 1
+
+	deg := 0
+	for _, r := range roots {
+		neg := f.Neg(f.Reduce(r)) // -r mod p
+		coeffs[deg+1] = 0
+		for j := deg; j >= 0; j-- {
+			// new[j+1] += old[j] * 1
+			coeffs[j+1] = f.Add(coeffs[j+1], coeffs[j])
+			// new[j]   += old[j] * (-r)
+			coeffs[j] = f.Mul(coeffs[j], neg)
+		}
+		deg++
+	}
+
+	out := make([]uint64, deg+1)
+	for i := 0; i <= deg; i++ {
+		out[i] = coeffs[i]
+	}
+
+	return &Polynomial{f: f, inner: out, isNTT: false}
+}
+
 func TestLocatorPolynomial(t *testing.T) {
 	roots := makeRoots(15)
 
@@ -434,7 +465,7 @@ func TestLocatorPolynomial(t *testing.T) {
 	}
 	pr := NewDensePolyRing(f)
 
-	p := PolyProductMonicNegRoots(f, roots)
+	p := polyProductMonicNegRoots(f, roots)
 
 	intr := NewInterpolator(pr)
 
@@ -475,7 +506,7 @@ func BenchmarkPolyProductMonicNegRoots(b *testing.B) {
 			b.ResetTimer()
 			var p *Polynomial
 			for i := 0; i < b.N; i++ {
-				p = PolyProductMonicNegRoots(f, roots)
+				p = polyProductMonicNegRoots(f, roots)
 			}
 			b.StopTimer()
 			benchPolySink = p
