@@ -134,12 +134,7 @@ func (f *PrimeField) Reduce(val uint64) uint64 {
 }
 
 func (f *PrimeField) Add(a, b uint64) uint64 {
-	if a == 0 {
-		// used for Elem{}, or Elem{0,nilField}.
-		return b
-	}
-
-	tmp := a + b // can't overflow since adding two integers smaller than 2^63.
+	tmp := a + b
 	if tmp >= f.prime {
 		tmp -= f.prime
 	}
