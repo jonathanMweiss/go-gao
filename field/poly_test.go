@@ -522,6 +522,7 @@ func BenchmarkDivs(b *testing.B) {
 		// {4096, 128},
 		// {8192, 256},
 		// {16384, 512},
+		{1 << 15, 1 << 9},
 	}
 
 	// For stability across runs

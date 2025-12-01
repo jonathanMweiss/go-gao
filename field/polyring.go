@@ -156,32 +156,32 @@ func (r *DensePolyRing) Sub(a, b, c *Polynomial) {
 		panic("preOpVerification failed")
 	}
 
+	c.f = r.Field
+	c.isNTT = a.isNTT
+
 	alen := len(a.inner)
 	blen := len(b.inner)
 	n := max(alen, blen)
 	ensureLen(c, n)
+	minLen := min(alen, blen)
 
 	f := r.Field
 
-	var av, bv uint64
-	for i := 0; i < n; i++ {
-		if i < alen {
-			av = r.Reduce(a.inner[i])
-		} else {
-			av = 0
-		}
-
-		if i < blen {
-			bv = r.Reduce(b.inner[i])
-		} else {
-			bv = 0
-		}
-
-		c.inner[i] = f.Sub(av, bv)
+	// Subtract overlapping part
+	for i := 0; i < minLen; i++ {
+		c.inner[i] = f.Sub(a.inner[i], b.inner[i])
 	}
 
-	c.f = r.Field
-	c.isNTT = a.isNTT
+	// Handle remaining coefficients
+	if alen > blen {
+		// If a is longer, copy its remaining part
+		copy(c.inner[minLen:], a.inner[minLen:])
+	} else if blen > alen {
+		// If b is longer, copy the negation of its remaining part
+		for i := minLen; i < blen; i++ {
+			c.inner[i] = f.Neg(b.inner[i])
+		}
+	}
 
 	r.trimTrailingZeros(c)
 }
