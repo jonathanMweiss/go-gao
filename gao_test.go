@@ -239,3 +239,58 @@ func BenchmarkDecode(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkDecodeFromSliceOnePercentCorruptionsNTT(b *testing.B) {
+	f, err := field.NewPrimeField(65537)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ks := []int{1 << 12, 1 << 13, 1 << 14, 1 << 15}
+	rng := rand.New(rand.NewSource(1337))
+
+	for _, k := range ks {
+		n := 2 * k
+		prms, err := NewCodeParameters(NewNttEvaluator(f), n, k)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		gao := NewCodeGao(prms)
+		slc := makeTestSlice(k)
+
+		encoded, err := gao.EncodeToSlice(slc)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		corrupted := make([]uint64, len(encoded))
+		copy(corrupted, encoded)
+
+		corruptions := n / 100
+		if corruptions == 0 {
+			corruptions = 1
+		}
+
+		indices := rng.Perm(n)[:corruptions]
+		for _, idx := range indices {
+			corrupted[idx] = f.Reduce(uint64(rng.Uint32()))
+		}
+
+		name := fmt.Sprintf("n=%d/k=%d/errors=%d(1%%)", n, k, corruptions)
+		b.Run(name, func(b *testing.B) {
+			work := make([]uint64, len(corrupted))
+
+			b.SetBytes(int64(len(corrupted) * 8))
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				copy(work, corrupted)
+				if _, err := gao.DecodeFromSlice(work); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

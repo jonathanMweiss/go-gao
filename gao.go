@@ -190,7 +190,7 @@ func (gao *Code) decodeGeneric(ys []uint64, xs []uint64) (*field.Polynomial, *fi
 
 	pr := gao.pr
 
-	g, _, v := pr.PartialExtendedEuclidean(gao.g0, g1, gao.stopDegree)
+	g, v := pr.PartialGCD(gao.g0, g1, gao.stopDegree)
 	f, r := pr.Div(g, v)
 
 	return f, r, nil
@@ -204,7 +204,7 @@ func (gao *Code) decodeNTT(ys, xs []uint64) (*field.Polynomial, *field.Polynomia
 
 	pr := gao.pr
 
-	g, _, v := pr.NttPartialExtendedEuclidean(gao.g0, g1, gao.stopDegree)
+	g, v := pr.NttPartialGCD(gao.g0, g1, gao.stopDegree)
 	f, r := pr.DivNTT(g, v)
 
 	return f, r, nil

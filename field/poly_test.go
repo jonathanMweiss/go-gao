@@ -617,7 +617,9 @@ func FuzzNttPEEA(f *testing.F) {
 		// Create random polynomials.
 		maxDegree := 4096
 		randomPolynomialDegree := randomSeed % (uint64(maxDegree) - 1)
-
+		if randomPolynomialDegree == 0 {
+			randomPolynomialDegree = 1
+		}
 		a := randomPolynomial(fld, randomSeed, maxDegree)
 		b := randomPolynomial(fld, randomSeed, int(randomPolynomialDegree))
 
