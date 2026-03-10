@@ -27,6 +27,47 @@ See unit tests for example.
 - Optimised decoding for erasure only (erasure only faults decrease redundancies).
 - Remove the Lattigo import by implementing a prime factorization algorithm (and switch to the MIT license).
 
+## Explanation about the decoding logic
+Decode explanation.
+GAO used a strong assumption:
+If there is a fix to the polynomial, it'll look like Berlekamp-Welch equation:
+$E(\omega_i)*f(\omega_i) = Q(\omega_i)$ for $i\in[n]$.
+$f(\omega_i)=y_i$ is the original polynomial, without corruptions.
+$E(x)$ will be the ERROR LOCATOR polynomial. $E(x)$ has roots where there are corruptions,
+Assume $Q(\omega_i)=E(\omega_i)*y_i$
+The above equation is true for any evaluation point $\omega_i$:
+$E(\omega_i)*f(\omega_i)= E(\omega_i) * y_i$, for errors equals $0$ on both sides.
+for non errors we get $E(\omega_i) *y_i$, a corrupt point on both sides of the equation
+
+Berlekamp-Welch proved that there if there is a solution, then there is only 1 unique $Q$ and $E$ in existence,
+also $Q$ has a specific degree and $E$ has a specific degree.
+Berlekamp-Welch then solve an equation system to find $Q$ and $E$ in O(n^3), and returns $f=Q/E$.
+
+Gao capitalize on their proof and statement, and go extracts $Q$ and $E$ via a partial GCD, returning $g$ of the specific degree of $Q$.
+$$GCD(g0,g1)=g=g0*u+g1*v$$.
+That is, since $g0=(x-\omega_1)(x-\omega_2)...(x-\omega_n)$, $g$ as GCD must have roots on the evaluation points too!
+meaning $g(\omega_i)=0$ for $\omega_i$ (otherwise it isn't a GCD), and $g(\omega_i)=0$ for $\omega_i$ with errors too.
+Since it has the same properties of $Q$, and it has the same degree, it must be $Q$, and thus we can get $f(x)$ by dividing $g$ by $v$
+
+If there is a remainder, then GAO's strong assumption is violated, meaning there is no solution to $Q=Ey_i$, and thus we return an error.
+
+AI Generated explanation for Decoding with erasures:
+Decode with erasures (known missing points):
+Let $U(x)=$ product over erased indices $j$ of $(x - \omega_j)$. This is the erasure locator.
+We multiply every received value by $U(\omega_i)$, so:
+
+	$y'_i = U(\omega_i) * y_i$
+
+and interpolate $g1$ from $(\omega_i, y'_i)$.
+
+For non-erased points, $y_i$ still matches $f(\omega_i)$, so $y'_i = U(\omega_i)*f(\omega_i)$.
+For erased points, $U(\omega_i)=0$ by construction, so $y'_i=0$ and those constraints are neutralized.
+
+In the no-erasure case, partial GCD gives $g/v = f$ directly.
+With erasures, partial GCD gives $g/v = U * f$, so we divide once more by $U$.
+If either division leaves a remainder, the decoding assumptions are inconsistent and we return an error.
+
+
 ## Disclosure
 This project used ChatGPT to implement/modify/improve fast 
 polynomial algorithms via Number Theoretic Transform (NTT). 
@@ -34,6 +75,7 @@ NTT-based methods were either optimized from naive versions (e.g., turning
 a recursive NTT into an iterative one with cached roots of unity)
 or generated directly and tested against classical (and written by me) 
 existing implementations (e.g., checking LongDivNTT results against my own implementation of LongDiv).
+Also the FastGCD algorithm.
 
 ## Contributing
 Contributions are welcome! If you’d like to contribute, please open an issue or submit a pull request.

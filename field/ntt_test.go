@@ -46,7 +46,7 @@ func TestPolyMult(t *testing.T) {
 	f, err := NewPrimeField(65537)
 	a.NoError(err)
 
-	pr := NewDensePolyRing(f)
+	pr := NewDensePolyRing(f).(*DensePolyRing)
 
 	for i := 0; i < 8; i++ {
 
@@ -55,7 +55,7 @@ func TestPolyMult(t *testing.T) {
 		p1 := randomPolynomial(f, 12345+uint64(i), degree)
 
 		regMulRes := &Polynomial{}
-		pr.Mul(p1, p1, regMulRes)
+		pr.mulSchoolbook(p1, p1, regMulRes)
 
 		// padding p1 with zeros:
 		p1.inner = append(p1.inner, make([]uint64, degree)...)
@@ -63,7 +63,7 @@ func TestPolyMult(t *testing.T) {
 		a.NoError(pr.NttForward(p1))
 
 		nttRes := &Polynomial{}
-		pr.MulNTT(p1, p1, nttRes)
+		pr.mulViaNTT(p1, p1, nttRes)
 
 		a.NoError(pr.NttBackward(nttRes))
 

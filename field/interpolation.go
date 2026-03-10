@@ -31,7 +31,7 @@ func (intr *Interpolator) Interpolate(xs, ys []uint64) (*Polynomial, error) {
 	// Creating m(x) = \prod_{0\le i \le n} m_i(x) = \prod_{0\le i \le n} (x - x_i)
 	miSlice := intr.createMiSlice(xs)
 
-	// O(n^2) total cost, since we are multiplying n polynomials of degree 1.
+	// updated to O(nlog^2n) total cost, since we are multiplying n polynomials of degree 1.
 	m := PolyProduct(intr.pr, miSlice)
 
 	liSlice := make([]Polynomial, len(xs))
@@ -58,14 +58,34 @@ func (intr *Interpolator) Interpolate(xs, ys []uint64) (*Polynomial, error) {
 	return intr.similarDegreePolySum(liSlice), nil
 }
 
-// PolyProduct multiplies a slice of polynomials.
+// PolyProduct multiplies a slice of polynomials using a divide-and-conquer product tree.
+// Complexity: O(n log^2 n) with NTT-based multiplication.
 func PolyProduct(pr PolyRing, miSlice []*Polynomial) *Polynomial {
-	m := makeConstantPoly(pr.GetField(), 1)
-	for _, mi := range miSlice {
-		pr.Mul(m, mi, m)
+	n := len(miSlice)
+	if n == 0 {
+		return makeConstantPoly(pr.GetField(), 1)
+	}
+	if n == 1 {
+		return miSlice[0].Copy()
 	}
 
-	return m
+	// Recursive divide-and-conquer
+	return polyProductRecursive(pr, miSlice)
+}
+
+func polyProductRecursive(pr PolyRing, polys []*Polynomial) *Polynomial {
+	n := len(polys)
+	if n == 1 {
+		return polys[0]
+	}
+
+	mid := n / 2
+	left := polyProductRecursive(pr, polys[:mid])
+	right := polyProductRecursive(pr, polys[mid:])
+
+	res := &Polynomial{}
+	pr.Mul(left, right, res)
+	return res
 }
 
 // similarDegreePolySum sums polynomials of the same degree.

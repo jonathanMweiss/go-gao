@@ -54,12 +54,12 @@ func (e *NttEvaluator) EvaluatePolynomial(p *field.Polynomial) ([]uint64, error)
 
 func (e *NttEvaluator) GenerateLocatorPolynomial(n int) *field.Polynomial {
 	// The locator polynomial L(x) = (x - x_1)(x - x_2)...(x - x_n)
-	// where x_1, x_2, ..., x_n are the evaluation points
-	// is vanishing for the roots of unity: L(x)=1*x^n-1
+	// where x_1, x_2, ..., x_n are the n-th roots of unity
+	// is L(x) = x^n - 1
 	f := e.pr.GetField()
 	inner := make([]uint64, n+1)
-	inner[0] = 1
-	inner[n] = f.Neg(1)
+	inner[0] = f.Neg(1)
+	inner[n] = 1
 	return field.NewPolynomial(f, inner, false)
 }
 

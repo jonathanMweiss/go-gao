@@ -160,11 +160,11 @@ func oldNttPartialExtendedEuclidean(r *DensePolyRing, a, b *Polynomial, stopDegr
 		}
 		A, B = B, rrem
 
-		r.mulFull(q, x1, tmp1)
+		r.Mul(q, x1, tmp1)
 		r.Sub(x0, tmp1, tmp2)
 		x0, x1, tmp2 = x1, tmp2, x0
 
-		r.mulFull(q, y1, tmp1)
+		r.Mul(q, y1, tmp1)
 		r.Sub(y0, tmp1, tmp2)
 		y0, y1, tmp2 = y1, tmp2, y0
 	}
@@ -216,7 +216,7 @@ func BenchmarkDivNTTLarge_OldVsOptimized(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, _ = pr.DivNTT(a, d)
+				_, _ = pr.divViaNTT(a, d)
 			}
 		})
 	}

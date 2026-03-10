@@ -225,7 +225,7 @@ func TestPolyMul(t *testing.T) {
 		p1 := NewPolynomial(f, slice, true)
 		p2 := NewPolynomial(f, slice, true)
 
-		pr.MulNTT(p1, p2, p1)
+		pr.Mul(p1, p2, p1)
 		a.Equal([]uint64{1, 4, 4}, p1.ToSlice())
 	})
 }
@@ -326,7 +326,7 @@ func FuzzPEEA(f *testing.F) {
 		f.FailNow()
 	}
 
-	pr := NewDensePolyRing(fld)
+	pr := NewDensePolyRing(fld).(*DensePolyRing)
 
 	f.Fuzz(func(t *testing.T, randomSeed uint64) {
 		// Create random polynomials.
@@ -385,7 +385,7 @@ func BenchmarkPEEA(b *testing.B) {
 		b.FailNow()
 	}
 
-	pr := NewDensePolyRing(f)
+	pr := NewDensePolyRing(f).(*DensePolyRing)
 
 	polyMaxDegree := 8193
 	p1 := randomPolynomial(f, largePrime/4, polyMaxDegree)   // Large Polynomial.
@@ -523,9 +523,10 @@ func TestDivNTT(t *testing.T) {
 		p := randomPolynomial(f, 12345, maxDegree)
 		q := randomPolynomial(f, 67890, maxDegree/2)
 
-		pr := NewDensePolyRing(f)
-		quo1, rem1 := pr.Div(p.Copy(), q.Copy())
-		quo2, rem2 := pr.DivNTT(p.Copy(), q.Copy())
+		pr := NewDensePolyRing(f).(*DensePolyRing)
+		// Ensuring both methods produce the same quotient and remainder.
+		quo1, rem1 := pr.divSchoolbook(p.Copy(), q.Copy())
+		quo2, rem2 := pr.divViaNTT(p.Copy(), q.Copy())
 		a.True(quo1.Equals(quo2))
 		a.True(rem1.Equals(rem2))
 	}
@@ -541,7 +542,7 @@ func BenchmarkDivs(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	pr := NewDensePolyRing(f)
+	pr := NewDensePolyRing(f).(*DensePolyRing)
 
 	type cfg struct{ degA, degB int }
 	cases := []cfg{
@@ -567,8 +568,8 @@ func BenchmarkDivs(b *testing.B) {
 		q := randomPolynomial(f, baseSeed+67890+uint64(tc.degB), tc.degB)
 
 		// Sanity check: both paths agree (outside the timer).
-		quo1, rem1 := pr.Div(p.Copy(), q.Copy())
-		quo2, rem2 := pr.DivNTT(p.Copy(), q.Copy())
+		quo1, rem1 := pr.divSchoolbook(p.Copy(), q.Copy())
+		quo2, rem2 := pr.divViaNTT(p.Copy(), q.Copy())
 		if !quo1.Equals(quo2) || !rem1.Equals(rem2) {
 			b.Fatalf("mismatch for %s", name)
 		}
@@ -587,11 +588,11 @@ func BenchmarkDivs(b *testing.B) {
 			}
 		})
 
-		b.Run(name+"/DivNTT", func(b *testing.B) {
+		b.Run(name+"/DivViaNTT", func(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				qq, rr := pr.DivNTT(p.Copy(), q.Copy())
+				qq, rr := pr.divViaNTT(p.Copy(), q.Copy())
 				if qq == nil || rr == nil {
 					b.Fatal("nil result")
 				}
@@ -611,7 +612,7 @@ func FuzzNttPEEA(f *testing.F) {
 		f.FailNow()
 	}
 
-	pr := NewDensePolyRing(fld)
+	pr := NewDensePolyRing(fld).(*DensePolyRing)
 
 	f.Fuzz(func(t *testing.T, randomSeed uint64) {
 		// Create random polynomials.

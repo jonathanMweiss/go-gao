@@ -72,13 +72,14 @@ func TestErasures(t *testing.T) {
 		encoded, err := gao.Encode(makeTestSlice(tc.k))
 		a.NoError(err)
 
-		// add erasures
-		shuffledXs := shuffle(prms.EvaluationPoints(prms.n))
-		for i := 0; i < prms.MaxErrors(); i++ {
+		// add erasures. We should be able to handle up to n-k erasures.
+		numErasures := prms.N() - prms.K()
+		shuffledXs := shuffle(t, prms.EvaluationPoints(prms.n))
+		for i := 0; i < numErasures; i++ {
 			delete(encoded, shuffledXs[i])
 		}
 
-		a.Greater(prms.N(), len(encoded))
+		a.Equal(prms.K(), len(encoded))
 
 		decoded, err := gao.Decode(encoded)
 		a.NoError(err)
@@ -87,8 +88,56 @@ func TestErasures(t *testing.T) {
 	}
 }
 
-func shuffle(slc []uint64) []uint64 {
-	rnd := rand.New(rand.NewSource(time.Now().Unix()))
+func TestMixedErasuresAndCorruptions(t *testing.T) {
+	a := assert.New(t)
+	f, err := field.NewPrimeField(65537)
+	a.NoError(err)
+
+	testCases := []testCase{
+		{NewSlowEvaluator(f), 18, 5}, // n-k=13. 2t+e <= 13. e=5, t=4 => 5+8=13.
+		{NewNttEvaluator(f), 16, 4},  // n-k=12. 2t+e <= 12. e=4, t=4 => 4+8=12.
+	}
+
+	for _, tc := range testCases {
+		prms, err := NewCodeParameters(tc.EvaluationMap, tc.n, tc.k)
+		a.NoError(err)
+
+		gao := NewCodeGao(prms)
+		originalData := makeTestSlice(tc.k)
+
+		encoded, err := gao.Encode(originalData)
+		a.NoError(err)
+
+		xs := tc.EvaluationPoints(tc.n)
+		shuffledXs := shuffle(t, xs)
+
+		numErasures := 4
+		if tc.n == 18 {
+			numErasures = 5
+		}
+		numCorruptions := 4
+
+		// Add erasures
+		for i := 0; i < numErasures; i++ {
+			delete(encoded, shuffledXs[i])
+		}
+
+		// Add corruptions
+		for i := numErasures; i < numErasures+numCorruptions; i++ {
+			encoded[shuffledXs[i]] = rand.Uint64()
+		}
+
+		decoded, err := gao.Decode(encoded)
+		a.NoError(err)
+		a.Equal(originalData, decoded)
+	}
+}
+
+func shuffle(t *testing.T, slc []uint64) []uint64 {
+	seed := time.Now().UnixNano()
+	t.Logf("Shuffling with seed: %d", seed)
+
+	rnd := rand.New(rand.NewSource(seed))
 
 	cpy := make([]uint64, len(slc))
 	copy(cpy, slc)
@@ -125,7 +174,7 @@ func TestCorruptions(t *testing.T) {
 		}
 
 		// add corruptions
-		shuffledXs := shuffle(prms.EvaluationPoints(prms.n))
+		shuffledXs := shuffle(t, prms.EvaluationPoints(prms.n))
 		for i := 0; i < prms.MaxErrors(); i++ {
 			corrupted[shuffledXs[i]] = rand.Uint64()
 		}

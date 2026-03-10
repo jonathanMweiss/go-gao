@@ -14,28 +14,28 @@ type PolyRing interface {
 	NttForward(a *Polynomial) error
 	NttBackward(a *Polynomial) error
 
-	// compute c = a * scalar
-	MulScalar(a *Polynomial, scalar uint64, c *Polynomial)
-
-	// compute c = a * b
-	Mul(a, b, c *Polynomial)
-	MulNTT(a, b, c *Polynomial) // multiply in NTT domain, pointwise
-
 	// compute c = a + b
 	Add(a, b, c *Polynomial)
 	// compute c = a - b
 	Sub(a, b, c *Polynomial)
 
-	// Creates quotient and remainder
-	Div(a, b *Polynomial) (q *Polynomial, r *Polynomial) // returns quotient, remainder
-	DivNTT(a, b *Polynomial) (q, r *Polynomial)          // returns quotient, remainder
+	// compute c = a * scalar
+	MulScalar(a *Polynomial, scalar uint64, c *Polynomial)
+
+	// compute c = a * b
+	// performs smart dispatch between schoolbook and NTT based
+	// on size and NTT support of the inner field.
+	Mul(a, b, c *Polynomial)
+
+	// Creates quotient q and remainder r.
+	// chooses the algorithm based on size and NTT support of the inner field.
+	Div(a, b *Polynomial) (q *Polynomial, r *Polynomial)
 
 	// Extended Euclidean algorithm.
 	PartialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial)
-	NttPartialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial)
 
-	PartialGCD(a, b *Polynomial, stopDegree int) (gcd, y *Polynomial)
-	NttPartialGCD(a, b *Polynomial, stopDegree int) (gcd, y *Polynomial)
+	// Uses the half-GCD algorithm, less suitable for small inputs but asymptotically faster than PartialExtendedEuclidean.
+	FastPartialGCD(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial)
 }
 
 const nttMulThreshold = 16 // ~coeff count where NTT starts winning
@@ -207,8 +207,40 @@ func (r *DensePolyRing) Mul(a, b, c *Polynomial) {
 		panic("preOpVerification failed")
 	}
 
+	la, lb := len(a.inner), len(b.inner)
+	if la == 0 || lb == 0 {
+		c.f, c.inner, c.isNTT = r.Field, c.inner[:0], a.isNTT
+		return
+	}
+
+	// In NTT domain, multiplication is pointwise and preserves NTT representation.
+	// (preOpVerification ensures a.isNTT == b.isNTT)
+	if a.isNTT {
+		n := len(a.inner)
+		ensureLen(c, n)
+		r.pointwiseMult(a, b, c)
+
+		c.f = r.Field
+		c.isNTT = true
+		return
+	}
+
+	// Coefficient-domain smart dispatch: schoolbook for small sizes, NTT otherwise.
+	if min(la, lb) <= nttMulThreshold || !r.canUseNTTConvolutionLen(la+lb-1) {
+		r.mulSchoolbook(a, b, c)
+		return
+	}
+
+	r.mulViaNTT(a, b, c)
+}
+
+func (r *DensePolyRing) mulSchoolbook(a, b, c *Polynomial) {
+	if !preOpVerification(a, b) {
+		panic("preOpVerification failed")
+	}
+
 	if a.isNTT || b.isNTT {
-		panic("use MulNTT for pointwise multiplication")
+		panic("mulSchoolbook cannot handle NTT polynomials")
 	}
 
 	f := r.Field
@@ -258,11 +290,44 @@ func (r *DensePolyRing) monomialMultPoly(ai uint64, deg int, p *Polynomial) *Pol
 	return NewPolynomial(fld, prod, p.isNTT)
 }
 
+func (r *DensePolyRing) Div(a, b *Polynomial) (q *Polynomial, rem *Polynomial) {
+	if !preOpVerification(a, b) {
+		return nil, nil
+	}
+
+	if a == nil || b == nil || a.isNTT || b.isNTT {
+		return nil, nil
+	}
+
+	bDeg := b.Degree()
+	aDeg := a.Degree()
+
+	if bDeg < 0 {
+		panic("division by zero polynomial")
+	}
+
+	if aDeg < bDeg {
+		return polyZero(r.Field), a.Copy()
+	}
+
+	quotLen := aDeg - bDeg + 1
+	// Since divViaNTT uses NTT-based convolution under the hood,
+	// we check if the convolution size is supported before deciding which division algorithm to use.
+	// 2*quotLen-1 is the convolution size needed
+	maxConvLen := max(2*quotLen-1, aDeg+1)
+
+	if quotLen > nttMulThreshold && r.canUseNTTConvolutionLen(maxConvLen) {
+		return r.divViaNTT(a, b)
+	}
+
+	return r.divSchoolbook(a, b)
+}
+
 // Following Algorithm 2.5 (Polynomial division with remainder) in
 // `Modern Computer Algebra` by Joachim von zur Gathen and Jürgen Gerhard
 //
 // returns q, r such that p = q*v + r.
-func (r *DensePolyRing) Div(a, b *Polynomial) (q *Polynomial, rem *Polynomial) {
+func (r *DensePolyRing) divSchoolbook(a, b *Polynomial) (q *Polynomial, rem *Polynomial) {
 	if !preOpVerification(a, b) {
 		return nil, nil
 	}
@@ -318,12 +383,37 @@ type polyMatrix2x2 struct {
 	a10, a11 *Polynomial
 }
 
+func (m polyMatrix2x2) Mul(r *DensePolyRing, other polyMatrix2x2) polyMatrix2x2 {
+	return polyMatrix2x2{
+		a00: polyAdd(r, polyMul(r, m.a00, other.a00), polyMul(r, m.a01, other.a10)),
+		a01: polyAdd(r, polyMul(r, m.a00, other.a01), polyMul(r, m.a01, other.a11)),
+		a10: polyAdd(r, polyMul(r, m.a10, other.a00), polyMul(r, m.a11, other.a10)),
+		a11: polyAdd(r, polyMul(r, m.a10, other.a01), polyMul(r, m.a11, other.a11)),
+	}
+}
+
+func (m polyMatrix2x2) MulVec(r *DensePolyRing, a, b *Polynomial) (*Polynomial, *Polynomial) {
+	aOut := polyAdd(r, polyMul(r, m.a00, a), polyMul(r, m.a01, b))
+	bOut := polyAdd(r, polyMul(r, m.a10, a), polyMul(r, m.a11, b))
+	return aOut, bOut
+}
+
 func polyIdentity2x2(f Field) polyMatrix2x2 {
 	return polyMatrix2x2{
 		a00: makeConstantPoly(f, 1), // x0
 		a01: makeConstantPoly(f, 0), // y0
 		a10: makeConstantPoly(f, 0), // x1
 		a11: makeConstantPoly(f, 1), // y1
+	}
+}
+
+// Creates:
+// |1 0 |
+// |1 -q|
+func stepMatrix(r *DensePolyRing, q *Polynomial) polyMatrix2x2 {
+	return polyMatrix2x2{
+		a00: polyZero(r.Field), a01: polyOne(r.Field),
+		a10: polyOne(r.Field), a11: polySub(r, polyZero(r.Field), q),
 	}
 }
 
@@ -426,7 +516,7 @@ func nextPow2(n int) int {
 	return 1 << (bits.Len(uint(n - 1)))
 }
 
-func (r *DensePolyRing) MulNTT(a, b, c *Polynomial) {
+func (r *DensePolyRing) mulViaNTT(a, b, c *Polynomial) {
 	if !preOpVerification(a, b) {
 		panic("preOpVerification failed")
 	}
@@ -603,7 +693,7 @@ func (r *DensePolyRing) seriesInverse(b *Polynomial, k int) *Polynomial {
 //
 // The algorithm capitalize the notion that Newton Iteration can be used to compute the inverse of
 // a polynomial in O(n log n) time.
-func (r *DensePolyRing) DivNTT(a, b *Polynomial) (q, rem *Polynomial) {
+func (r *DensePolyRing) divViaNTT(a, b *Polynomial) (q, rem *Polynomial) {
 	if a == nil || b == nil || a.isNTT || b.isNTT {
 		panic("LongDivNTT expects non-nil coefficient-domain polynomials")
 	}
@@ -648,23 +738,6 @@ func (r *DensePolyRing) DivNTT(a, b *Polynomial) (q, rem *Polynomial) {
 	return q, rem
 }
 
-// mulFull computes c = a*b in coefficient domain, length len(a)+len(b)-1.
-// It uses MulNTT when big enough; otherwise falls back to Mul (classic algorithm).
-// The decision is based on min(la, lb): when one operand is small, schoolbook
-// multiplication is O(min·max) which beats NTT's O(N log N).
-func (r *DensePolyRing) mulFull(a, b, c *Polynomial) {
-	la, lb := len(a.inner), len(b.inner)
-	if la == 0 || lb == 0 {
-		c.f, c.inner, c.isNTT = r.Field, c.inner[:0], false
-		return
-	}
-	if min(la, lb) <= nttMulThreshold || !r.canUseNTTConvolutionLen(la+lb-1) {
-		r.Mul(a, b, c)
-	} else {
-		r.MulNTT(a, b, c)
-	}
-}
-
 func (r *DensePolyRing) canUseNTTConvolutionLen(convLen int) bool {
 	if convLen <= 0 {
 		return false
@@ -681,7 +754,7 @@ func (r *DensePolyRing) canUseNTTConvolutionLen(convLen int) bool {
 
 func polyMul(r *DensePolyRing, a, b *Polynomial) *Polynomial {
 	out := &Polynomial{f: r.Field, isNTT: false}
-	r.mulFull(a, b, out)
+	r.Mul(a, b, out)
 	return out
 }
 
@@ -695,29 +768,6 @@ func polySub(r *DensePolyRing, a, b *Polynomial) *Polynomial {
 	out := &Polynomial{f: r.Field, isNTT: false}
 	r.Sub(a, b, out)
 	return out
-}
-
-func (r *DensePolyRing) polyDivSmart(a, b *Polynomial) (q, rem *Polynomial) {
-	if b == nil || b.Degree() < 0 {
-		panic("division by zero polynomial")
-	}
-
-	if a == nil {
-		return polyZero(r.Field), polyZero(r.Field)
-	}
-
-	if a.Degree() < b.Degree() {
-		return polyZero(r.Field), a.Copy()
-	}
-
-	quotDeg := a.Degree() - b.Degree()
-	// When the quotient degree is small (common in PEEA with errors),
-	// schoolbook division is O(quotDeg·degB) which beats DivNTT's O(n log n).
-	if quotDeg > nttMulThreshold {
-		return r.DivNTT(a, b)
-	}
-
-	return r.Div(a, b)
 }
 
 // mulSubInto computes dst = a - q*b in one fused pass when q is small,
@@ -740,7 +790,7 @@ func (r *DensePolyRing) mulSubInto(dst, a, q, b *Polynomial) {
 	// For large q, fall back to mulFull + Sub with a temporary.
 	if min(lq, lb) > nttMulThreshold {
 		tmp := &Polynomial{f: r.Field}
-		r.mulFull(q, b, tmp)
+		r.Mul(q, b, tmp)
 		r.Sub(a, tmp, dst)
 		return
 	}
@@ -801,7 +851,7 @@ func (r *DensePolyRing) NttPartialExtendedEuclidean(a, b *Polynomial, stopDegree
 		}
 
 		// A = q*B + r
-		q, rrem := r.polyDivSmart(A, B)
+		q, rrem := r.Div(A, B)
 		A, B = B, rrem // gcd(A,B) = gcd(B,rrem)
 		degA, degB = degB, B.Degree()
 
@@ -817,68 +867,229 @@ func (r *DensePolyRing) NttPartialExtendedEuclidean(a, b *Polynomial, stopDegree
 	return A, M.a00, M.a10
 }
 
-// NttPartialGCD is like NttPartialExtendedEuclidean but only returns (gcd, y),
-// skipping computation of the unused x Bézout coefficient for ~2x speedup on the matrix updates.
-func (r *DensePolyRing) NttPartialGCD(a, b *Polynomial, stopDegree int) (gcd, y *Polynomial) {
+/*
+Half-GCD (HGCD) Implementation and Fast Partial GCD
+
+The following functions implement the O(n log^2 n) version of the Euclidean Algorithm.
+Traditional Euclidean Algorithm computes remainders one by one, taking O(n^2) time.
+HGCD uses a divide-and-conquer approach by only looking at the most significant
+coefficients (the "high parts") to compute transition matrices.
+
+Terminology:
+- Euclidean sequence: The sequence of remainders r_0, r_1, ... where r_0=a, r_1=b.
+- Transition Matrix M: A 2x2 matrix such that [r_i, r_{i+1}]^T = M * [a, b]^T.
+*/
+
+// hgcdThreshold is the degree below which the overhead of recursion exceeds the
+// benefits of the divide-and-conquer approach.
+const hgcdThreshold = 128
+
+/*
+FastPartialGCD finds the first remainder in the Euclidean sequence of (a, b)
+whose degree is strictly less than stopDegree.
+
+Works on Copies of A and B.
+
+Complexity: O(n log^2 n).
+*/
+func (r *DensePolyRing) FastPartialGCD(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial) {
+	// We work on copies to preserve the original inputs.
 	A := a.Copy()
 	B := b.Copy()
-	A.isNTT, B.isNTT = false, false
 
-	// Only track right column: (M10, M11).
-	M10 := polyZero(r.Field)
-	M11 := polyOne(r.Field)
+	r.ensureNotNttForm(A)
+	r.ensureNotNttForm(B)
 
-	tmp := &Polynomial{f: r.Field}
+	// fastGCDRec is the recursive driver that uses HGCD to 'jump' through the sequence.
+	M := r.fastGCDRec(A, B, stopDegree)
 
-	degA := A.Degree()
-	degB := B.Degree()
+	// Apply the final transition matrix to the original inputs to get the desired remainder.
+	AOut, _ := M.MulVec(r, A, B)
+	r.trimTrailingZeros(AOut)
 
-	for degA >= stopDegree {
-		if degB < 0 || len(B.inner) == 0 {
-			break
-		}
-
-		q, rrem := r.polyDivSmart(A, B)
-		A, B = B, rrem
-		degA, degB = degB, B.Degree()
-
-		// Update only right column: (M10, M11) = (M11, M10 - q*M11)
-		r.mulSubInto(tmp, M10, q, M11)
-		M10, M11, tmp = M11, tmp, M10
-	}
-
-	return A, M10
+	// Return the remainder and its corresponding Bézout coefficients for 'a' and 'b':
+	// AOut = M.a00 * a + M.a01 * b
+	return AOut, M.a00, M.a01
 }
 
-// PartialGCD is like PartialExtendedEuclidean but only returns (gcd, y),
-// skipping computation of the unused x Bézout coefficient for ~2x speedup.
-func (r *DensePolyRing) PartialGCD(a, b *Polynomial, stopDegree int) (gcd, y *Polynomial) {
-	A := a.Copy()
-	B := b.Copy()
-	degA := A.Degree()
-	degB := B.Degree()
+func (r *DensePolyRing) ensureNotNttForm(A *Polynomial) {
+	if A.isNTT {
+		r.NttBackward(A)
+	}
+	A.isNTT = false
+}
 
-	// Only track right column: (M01, M11).
-	M01 := polyZero(r.Field)
-	M11 := polyOne(r.Field)
+/*
+fastGCDRec is the recursive engine for Fast GCD. It bridges the gap between
+the starting degrees and the target stopDegree using HGCD for large steps.
 
-	tmp1 := &Polynomial{f: r.Field}
-	tmp2 := &Polynomial{f: r.Field}
-
-	for degA >= stopDegree {
-		if degB < 0 {
-			break
-		}
-
-		q, rrem := r.Div(A, B)
-		A, B = B, rrem
-		degA, degB = degB, B.Degree()
-
-		// (M01, M11) = (M11, M01 - q*M11)
-		r.Mul(q, M11, tmp1)
-		r.Sub(M01, tmp1, tmp2)
-		M01, M11, tmp2 = M11, tmp2, M01
+Parameters:
+- a, b: Current polynomials in the sequence.
+- stopDegree: The degree boundary we are aiming to cross.
+*/
+func (r *DensePolyRing) fastGCDRec(a, b *Polynomial, stopDegree int) polyMatrix2x2 {
+	// Base Case 1: Target reached.
+	aDeg := a.Degree()
+	if aDeg < stopDegree || b.Degree() < 0 {
+		return polyIdentity2x2(r.Field)
 	}
 
-	return A, M01
+	// Base Case 2: Small polynomials, use iterative O(n^2) logic.
+	if aDeg < hgcdThreshold {
+		return r.iterativePartialExtendedEuclideanMatrix(a, b, stopDegree)
+	}
+
+	// Calculate required degree reduction 'm'.
+	// We want to reduce deg(a) until it is < stopDegree.
+	// Distance to target = deg(a) - (stopDegree - 1) = deg(a) - stopDegree + 1.
+	n := aDeg
+	m := n - stopDegree + 1
+
+	// 1. Half-GCD Recursive Step:
+	// Use HGCD to compute a matrix M that reduces degrees significantly.
+	M := r.hgcd(a, b, m)
+	aCur, bCur := M.MulVec(r, a, b)
+	r.trimTrailingZeros(aCur)
+	r.trimTrailingZeros(bCur)
+
+	// Check if the HGCD step was enough to reach the target stopDegree.
+	if aCur.Degree() < stopDegree || bCur.Degree() < 0 {
+		return M
+	}
+
+	// 2. Standard Euclidean Step:
+	// Perform exactly ONE division step: aCur = q*bCur + rem.
+	// This step is mandatory to ensure progress. Without it, the algorithm
+	// might call HGCD with the same parameters again, leading to an infinite loop.
+	q, rem := r.Div(aCur, bCur)
+	Mstep := stepMatrix(r, q)
+	M = Mstep.Mul(r, M)
+
+	// After one division step, the pair is (bCur, rem).
+	// If bCur.Degree() < stopDegree, then bCur is the first remainder with degree < stopDegree.
+	if bCur.Degree() < stopDegree || rem.Degree() < 0 {
+		return M
+	}
+
+	// 3. Second Recursive Step:
+	// Continue the process on the remainder.
+	S := r.fastGCDRec(bCur, rem, stopDegree)
+	return S.Mul(r, M)
+}
+
+/*
+The half-GCD (HGCD) algorithm is a divide-and-conquer method that computes a GCD transition matrix.
+HGCD returns a matrix M such that for (a', b') = M * (a, b),
+the degree of b' is reduced by at least 'm' relative to the original degree of a.
+That is: deg(b') < deg(a) - m.
+
+The HGCD algorithm relies on an insight (proven in `Modern Computer Algebra` by
+Joachim von zur Gathen and Jürgen Gerhard) that the high-order coefficients of
+the polynomials share the same transition matrix as the full polynomials, allowing us
+to use only the top coefficients of a and b to compute a transition matrix that will also reduce
+the full polynomials by a significant amount.
+Namely, it works by recursively applying itself to the "high parts" of the polynomials,
+which are obtained by shifting the inputs to focus on the top coefficients. and thus performing
+smaller multiplications and divisions as much as possible.
+
+Procedure:
+  - First Call: performs HGCD on the high parts of a and b, reducing the degree by about m/2.
+  - Bridge: It performs one division to ensure progress.
+  - Second Call: It calls itself recursively on the new pair (b,remainder) to advance m further.
+
+The result
+This implements the Schönhage strategy of high-part recursion.
+*/
+func (r *DensePolyRing) hgcd(a, b *Polynomial, m int) polyMatrix2x2 {
+	n := a.Degree()
+	// Base Case: target reduction reached or degree too small.
+	if b.Degree() < n-m || n < hgcdThreshold {
+		return r.iterativePartialExtendedEuclideanMatrix(a, b, n-m)
+	}
+
+	/*
+		Divide and Conquer:
+		To reduce by distance 'm', we first reduce by distance m/2.
+		We 'shift' the polynomials by k to only look at the top bits.
+		Shifting ensures that the recursive calls work on smaller polynomials (O(m) degrees)
+		while the results remain valid for the high-order coefficients of the full inputs.
+	*/
+	m1 := m / 2
+	k := n - 2*m1
+	if k < 0 {
+		k = 0
+	}
+
+	// 1. First Recursive Call (on high parts):
+	// Reduction distance is m1.
+	R := r.hgcd(r.shiftRight(a, k), r.shiftRight(b, k), m1)
+
+	// 2. Apply the transition matrix R to the full inputs.
+	aCur, bCur := R.MulVec(r, a, b)
+	r.trimTrailingZeros(aCur)
+	r.trimTrailingZeros(bCur)
+
+	bCurDeg := bCur.Degree()
+	// Check if the reduction target m has already been met.
+	if bCurDeg < n-m || bCurDeg < 0 {
+		return R
+	}
+
+	// 3. Standard Euclidean Step (Mandatory Progress):
+	// Perform one division step to ensure the next recursive call makes progress.
+	q, rem := r.Div(aCur, bCur)
+	Mstep := stepMatrix(r, q)
+	M := Mstep.Mul(r, R)
+
+	remDeg := rem.Degree()
+	// Check if the reduction target m is met after division.
+	if remDeg < n-m || remDeg < 0 {
+		return M
+	}
+
+	// 4. Second Recursive Call:
+	// Calculate the remaining distance m2 to reach the total target m.
+	n_new := bCur.Degree()
+	m2 := m - (n - n_new)
+	if m2 <= 0 {
+		return M
+	}
+	// Recalculate shift relative to the new degree.
+	k2 := n_new - 2*m2
+	if k2 < 0 {
+		k2 = 0
+	}
+
+	S := r.hgcd(r.shiftRight(bCur, k2), r.shiftRight(rem, k2), m2)
+	return S.Mul(r, M)
+}
+
+/*
+iterativePartialExtendedEuclideanMatrix is the O(n^2) fallback.
+It computes the transition matrix M until deg(a) < stopDegree.
+*/
+func (r *DensePolyRing) iterativePartialExtendedEuclideanMatrix(a, b *Polynomial, stopDegree int) polyMatrix2x2 {
+	A := a.Copy()
+	B := b.Copy()
+	M := polyIdentity2x2(r.Field)
+
+	for A.Degree() >= stopDegree && B.Degree() >= 0 {
+		q, rem := r.Div(A, B)
+		A, B = B, rem
+
+		Mnew := stepMatrix(r, q)
+		M = Mnew.Mul(r, M)
+	}
+	return M
+}
+
+// shiftRight extracts the high coefficients of a polynomial by shifting.
+func (r *DensePolyRing) shiftRight(p *Polynomial, m int) *Polynomial {
+	if m <= 0 {
+		return p.Copy()
+	}
+	if m >= len(p.inner) {
+		return polyZero(r.Field)
+	}
+	return NewPolynomial(r.Field, p.inner[m:], false)
 }

@@ -156,3 +156,56 @@ func BenchmarkMDivMi(b *testing.B) {
 		}
 	})
 }
+
+// used to compare the performance of the O(n log^2 n) tree-based product vs the O(n^2) simple product.
+func simplePolyProduct(pr PolyRing, miSlice []*Polynomial) *Polynomial {
+	m := makeConstantPoly(pr.GetField(), 1)
+	for _, mi := range miSlice {
+		pr.Mul(m, mi, m)
+	}
+
+	return m
+}
+
+func BenchmarkPolyProductComparison(b *testing.B) {
+	f, err := NewPrimeField(65537)
+	if err != nil {
+		b.Fatalf("failed to create field: %v", err)
+	}
+
+	pr := NewDensePolyRing(f)
+	intr := NewInterpolator(pr)
+
+	cases := []int{8, 32, 128, 512, 2048}
+	for _, n := range cases {
+		xs := make([]uint64, n)
+		for i := range xs {
+			xs[i] = uint64(i + 1)
+		}
+
+		miSlice := intr.createMiSlice(xs)
+
+		// Sanity check once per case so benchmarked runs only measure performance.
+		tree := PolyProduct(pr, miSlice)
+		linear := simplePolyProduct(pr, miSlice)
+		if !tree.Equals(linear) {
+			b.Fatalf("mismatch for n=%d", n)
+		}
+
+		b.Run(fmt.Sprintf("n=%d/tree", n), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = PolyProduct(pr, miSlice)
+			}
+		})
+
+		b.Run(fmt.Sprintf("n=%d/simple", n), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = simplePolyProduct(pr, miSlice)
+			}
+		})
+	}
+}
