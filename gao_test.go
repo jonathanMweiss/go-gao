@@ -24,6 +24,14 @@ func makeTestSlice(k int) []uint64 {
 	return poly
 }
 
+// corruptCodeword overwrites count distinct, randomly chosen positions of an encoded
+// codeword with random field elements (count must be <= len(codeword)).
+func corruptCodeword(f field.Field, rng *rand.Rand, codeword []uint64, count int) {
+	for _, idx := range rng.Perm(len(codeword))[:count] {
+		codeword[idx] = f.Reduce(rng.Uint64())
+	}
+}
+
 func TestNoCorruptions(t *testing.T) {
 	a := assert.New(t)
 	f, err := field.NewPrimeField(65537)
@@ -194,6 +202,8 @@ func TestSliceEncodeDecode(t *testing.T) {
 	f, err := field.NewPrimeField(65537)
 	a.NoError(err)
 
+	rng := rand.New(rand.NewSource(1337))
+
 	testCases := []testCase{
 		{NewSlowEvaluator(f), 18, 5},
 		{NewNttEvaluator(f), 16, 4},
@@ -221,12 +231,76 @@ func TestSliceEncodeDecode(t *testing.T) {
 		// Test with corruptions
 		corruptedSlice := make([]uint64, len(encodedSlice))
 		copy(corruptedSlice, encodedSlice)
-		for i := 0; i < prms.MaxErrors(); i++ {
-			corruptedSlice[i] = rand.Uint64()
-		}
+		corruptCodeword(f, rng, corruptedSlice, prms.MaxErrors())
+
 		decodedFromCorrupted, err := gao.DecodeFromSlice(corruptedSlice)
 		a.NoError(err)
 		a.Equal(originalData, decodedFromCorrupted)
+	}
+}
+
+// TestOptimisticErrorFreePath exercises the optimistic no-error short-circuit added to
+// decodeNTT/decodeGeneric.
+//
+// (a) Decode is correct across the whole tolerated sweep 0..MaxErrors: 0 errors takes
+// the fast path, 1..MaxErrors fall back to FastPartialGCD, and every one recovers the
+// original message — so the fast path never misfires within tolerance.
+//
+// (b) sum of codewords is a codeword, thus fires the fast path.
+func TestOptimisticErrorFreePath(t *testing.T) {
+	a := assert.New(t)
+	f, err := field.NewPrimeField(65537)
+	a.NoError(err)
+
+	rng := rand.New(rand.NewSource(1337))
+
+	testCases := []testCase{
+		{NewSlowEvaluator(f), 18, 5}, // generic (interpolation) path
+		{NewNttEvaluator(f), 16, 4},  // NTT path
+	}
+
+	for _, tc := range testCases {
+		prms, err := NewCodeParameters(tc.EvaluationMap, tc.n, tc.k)
+		a.NoError(err)
+		gao := NewCodeGao(prms)
+
+		msg := makeTestSlice(tc.k)
+		enc1, err := gao.EncodeToSlice(msg)
+		a.NoError(err)
+
+		// (a) correctness across 0..MaxErrors corruptions at random positions.
+		for e := 0; e <= prms.MaxErrors(); e++ {
+			work := make([]uint64, len(enc1))
+			copy(work, enc1)
+
+			corruptCodeword(f, rng, work, e)
+
+			decoded, err := gao.DecodeFromSlice(work)
+			a.NoError(err, "n=%d errors=%d", tc.n, e)
+			a.Equal(msg, decoded, "n=%d errors=%d", tc.n, e)
+		}
+
+		// (b) sum of codewords is a codeword.
+		msg2 := make([]uint64, tc.k)
+		for i := range msg2 {
+			msg2[i] = uint64(2*i + 1)
+		}
+		enc2, err := gao.EncodeToSlice(msg2)
+		a.NoError(err)
+
+		summed := make([]uint64, tc.n)
+		for i := range summed {
+			summed[i] = f.Add(enc1[i], enc2[i])
+		}
+
+		decoded, err := gao.DecodeFromSlice(summed)
+		a.NoError(err, "beyond-tolerance n=%d", tc.n)
+
+		want := make([]uint64, tc.k)
+		for i := range want {
+			want[i] = f.Add(msg[i], msg2[i])
+		}
+		a.Equal(want, decoded, "beyond-tolerance n=%d: decode returns the sum codeword's message", tc.n)
 	}
 }
 
@@ -321,10 +395,7 @@ func BenchmarkDecodeFromSliceOnePercentCorruptionsNTT(b *testing.B) {
 			corruptions = 1
 		}
 
-		indices := rng.Perm(n)[:corruptions]
-		for _, idx := range indices {
-			corrupted[idx] = f.Reduce(uint64(rng.Uint32()))
-		}
+		corruptCodeword(f, rng, corrupted, corruptions)
 
 		name := fmt.Sprintf("n=%d/k=%d/errors=%d(1%%)", n, k, corruptions)
 		b.Run(name, func(b *testing.B) {

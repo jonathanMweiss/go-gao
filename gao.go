@@ -122,6 +122,8 @@ var ErrTooManyMissingPoints = errors.New("too many missing points")
 var ErrTooManyPoints = errors.New("too many evaluated points")
 var ErrDecoding = errors.New("decoding error")
 
+// Decode cannot correct more than (n-k)/2 errors, and cannot detect more than n-k errors.
+// If the number of errors exceeds (n-k)/2, correction is not guaranteed.
 func (gao *Code) Decode(received map[uint64]uint64) ([]uint64, error) {
 	// fill missing evaluated points with 0.
 	xs, ys, erased, err := gao.prepareDecoding(received)
@@ -220,6 +222,17 @@ func (gao *Code) decodeGeneric(ys []uint64, xs []uint64, erased []int) (*field.P
 		return nil, nil, err
 	}
 
+	// Optimistic error-free path:
+	// When g_1 has degree < K, it'll be the first polynomial in the Euclidean
+	// remainder sequence below stopDegree, so FastPartialGCD would
+	// thus, GCD returns g=g1, v=1 with r=0.
+	// Since the return value `f` is defined f=g1/v (and in this case v=1), we return g1 directly.
+	// This is true only when there are no erasures.
+	if len(erased) == 0 && g1.Degree() < gao.K() {
+		f, r := gao.codewordMessage(g1)
+		return f, r, nil
+	}
+
 	pr := gao.pr
 
 	g, _, v := pr.FastPartialGCD(gao.g0, g1, stopDegree)
@@ -269,6 +282,17 @@ func (gao *Code) decodeNTT(ys, xs []uint64, erased []int) (*field.Polynomial, *f
 		return nil, nil, err
 	}
 
+	// Optimistic error-free path:
+	// When g_1 has degree < K, it'll be the first polynomial in the Euclidean
+	// remainder sequence below stopDegree, so FastPartialGCD would
+	// thus, GCD returns g=g1, v=1 with r=0.
+	// Since the return value `f` is defined f=g1/v (and in this case v=1), we return g1 directly.
+	// This is true only when there are no erasures.
+	if len(erased) == 0 && g1.Degree() < gao.K() {
+		f, r := gao.codewordMessage(g1)
+		return f, r, nil
+	}
+
 	pr := gao.pr
 
 	g, _, v := pr.FastPartialGCD(gao.g0, g1, stopDegree)
@@ -287,6 +311,25 @@ func (gao *Code) decodeNTT(ys, xs []uint64, erased []int) (*field.Polynomial, *f
 	f, r := pr.Div(g, v)
 
 	return f, r, nil
+}
+
+// codewordMessage returns the optimistic error-free decode result for g1 — the
+// inverse-NTT / interpolant of the received points — when deg(g1) < K. `received` is
+// then exactly a codeword and g1 is its message. The returned pair mirrors the normal
+// FastPartialGCD path: the message trimmed to its degree and a zero remainder, so sliceDecode's guard and the
+// callers see identical output. deg(g1) < 0 is the all-zero message.
+func (gao *Code) codewordMessage(g1 *field.Polynomial) (f, r *field.Polynomial) {
+	fld := gao.pr.GetField()
+
+	coeffs := []uint64{0}
+	if deg := g1.Degree(); deg >= 0 {
+		coeffs = g1.ToSlice()[:deg+1]
+	}
+
+	f = field.NewPolynomial(fld, coeffs, false)
+	r = field.NewPolynomial(fld, []uint64{0}, false)
+
+	return f, r
 }
 
 // create the erasure locator polynomial E(x) = product of (x - xi) for xi an evaluation point corresponding to an erased index.
