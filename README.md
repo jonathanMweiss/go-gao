@@ -113,5 +113,15 @@ Contributions are welcome! If you’d like to contribute, please open an issue o
 - [Reed-Solomon Codes - Wikipedia](https://en.wikipedia.org/wiki/Reed%E2%80%93Solomon_error_correction)
 
 
+## Author
+Jonathan Weiss ([@jonathanmweiss](https://github.com/jonathanmweiss))
+
 ## License
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
+Copyright 2025-2026 Jonathan Weiss.
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the
+full text and [NOTICE](NOTICE) for attribution and third-party dependencies.
+
+This code was originally developed as part of the
+[Cohort](https://github.com/jonathanmweiss/Cohort) project and extracted into a
+standalone module.
