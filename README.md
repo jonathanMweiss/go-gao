@@ -6,21 +6,58 @@ The decoder can perform robust interpolation (fix corruptions), given a list of 
 
 
 ## Installation
-To use the Gao decoder in your Go project, install it using:
 
 ```sh
- go get example.com/pir2peer
+go get github.com/jonathanmweiss/go-gao
 ```
 
-Then, import it in your code:
-
-```go
- import "example.com/pir2peer"
-```
+Requires Go 1.25 or later.
 
 ## Usage
-See unit tests for example.
 
+Encode `k` data symbols into an `n`-symbol codeword, then recover the data after
+up to `(n-k)/2` symbols have been corrupted:
+
+```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/jonathanmweiss/go-gao"
+	"github.com/jonathanmweiss/go-gao/field"
+)
+
+func main() {
+	f, _ := field.NewPrimeField(65537)
+
+	const n, k = 16, 4
+	params, _ := gao.NewCodeParameters(gao.NewNttEvaluator(f), n, k)
+	code := gao.NewCodeGao(params)
+
+	data := []uint64{10, 20, 30, 40}
+	codeword, _ := code.EncodeToSlice(data)
+
+	// Corrupt 6 symbols -- the maximum this code can repair.
+	for _, i := range []int{0, 3, 5, 9, 11, 14} {
+		codeword[i] = 12345
+	}
+
+	decoded, _ := code.DecodeFromSlice(codeword)
+	fmt.Println(decoded) // [10 20 30 40]
+}
+```
+
+Two evaluation-point strategies are available. `NewNttEvaluator` uses roots of
+unity and NTT-based polynomial arithmetic (fast; needs a field with suitable
+roots of unity). `NewSlowEvaluator` uses successive powers of a generator and
+classical arithmetic, and works for any prime field.
+
+`Encode`/`Decode` operate on `map[uint64]uint64` of evaluation point to value,
+which lets you express *erasures* by simply omitting entries.
+`EncodeToSlice`/`DecodeFromSlice` are the positional equivalents.
+
+See the unit tests for further examples.
 
 ## Planned Improvements:
 
@@ -86,3 +123,5 @@ Contributions are welcome! If you’d like to contribute, please open an issue o
 - [Reed-Solomon Codes - Wikipedia](https://en.wikipedia.org/wiki/Reed%E2%80%93Solomon_error_correction)
 
 
+## License
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).

@@ -4,7 +4,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"example.com/pir2peer/gao/field"
+	"github.com/jonathanmweiss/go-gao/field"
 	"github.com/stretchr/testify/assert"
 )
 

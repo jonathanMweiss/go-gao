@@ -3,7 +3,7 @@ package gao
 import (
 	"errors"
 
-	"example.com/pir2peer/gao/field"
+	"github.com/jonathanmweiss/go-gao/field"
 )
 
 type Coder interface {

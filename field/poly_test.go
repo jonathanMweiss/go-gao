@@ -479,7 +479,7 @@ func TestLocatorPolynomial(t *testing.T) {
 var benchPolySink *Polynomial // avoid DCE
 
 /*
-pkg: example.com/pir2peer/field
+pkg: github.com/jonathanmweiss/go-gao/field
 BenchmarkPolyProductMonicNegRoots
 BenchmarkPolyProductMonicNegRoots/n=15
 BenchmarkPolyProductMonicNegRoots/n=15-10         	 1799329	       661.1 ns/op	     304 B/op	       3 allocs/op

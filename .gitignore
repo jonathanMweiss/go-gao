@@ -1,2 +1,19 @@
-poc/*
+# Binaries and build output
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test and coverage output
+*.test
+*.out
+coverage.*
+
+# Go workspace
+go.work
+go.work.sum
+
+# OS / editor
 .DS_Store
+.idea/
+.vscode/

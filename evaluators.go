@@ -4,7 +4,7 @@ import (
 	"errors"
 	"sync"
 
-	"example.com/pir2peer/gao/field"
+	"github.com/jonathanmweiss/go-gao/field"
 )
 
 // Can be fast evaluation, like NTT, negacyclic-NTT, or just plain polynomial evaluation.
