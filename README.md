@@ -62,7 +62,7 @@ See the unit tests for further examples.
 ## Planned Improvements:
 
 - Optimised decoding for erasure only (erasure only faults decrease redundancies).
-- Remove the Lattigo import by implementing a prime factorization algorithm (and switch to the MIT license).
+- Remove the Lattigo import by implementing a prime factorization algorithm.
 
 ## Explanation about the decoding logic
 Decode explanation.
@@ -103,16 +103,6 @@ For erased points, $U(\omega_i)=0$ by construction, so $y'_i=0$ and those constr
 In the no-erasure case, partial GCD gives $g/v = f$ directly.
 With erasures, partial GCD gives $g/v = U * f$, so we divide once more by $U$.
 If either division leaves a remainder, the decoding assumptions are inconsistent and we return an error.
-
-
-## Disclosure
-This project used ChatGPT to implement/modify/improve fast 
-polynomial algorithms via Number Theoretic Transform (NTT). 
-NTT-based methods were either optimized from naive versions (e.g., turning
-a recursive NTT into an iterative one with cached roots of unity)
-or generated directly and tested against classical (and written by me) 
-existing implementations (e.g., checking LongDivNTT results against my own implementation of LongDiv).
-Also the FastGCD algorithm.
 
 ## Contributing
 Contributions are welcome! If you’d like to contribute, please open an issue or submit a pull request.
