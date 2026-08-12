@@ -86,22 +86,42 @@ Since it has the same properties of $Q$, and it has the same degree, it must be 
 
 If there is a remainder, then GAO's strong assumption is violated, meaning there is no solution to $Q=Ey_i$, and thus we return an error.
 
-
+(if we don't have some points, we can just fill with random points as errors)
 
 ### Decode with erasures (known missing points):
-Adding erasures uses similar ideas, in recursion!
-When we have points that we know are missing, we create a specialized erasure locator (similar to g_0, but just for erasures): $S(x) = \prod (x-\omega_j)$ for each erased $j$  (same shape as g_0, with less points).
-Now, when we multiply $S(x)$ with the berlekamp-welch equation from both sides we get:
+an erasure filled with an arbitrary value is simply an error, and plain GAO decodes it
+as-is: the error locator picks up $\omega_j$ as one of its roots like any other corruption, and everything
+goes through as long as $s+e\le\frac{n-k}{2}$. But that way each erasure costs a *whole* error, because
+the decoder spends budget discovering a location we already knew.
 
-$$\underbrace{ S(\omega_i)E(\omega_i)}_{\tilde{E}(x)}\cdot f(\omega_i) = \underbrace{S(\omega_i)Q(\omega_i)}_{\tilde{Q}(x)} $$
+Since we do know those locations, we can hand the decoder their roots instead of making it find them.
+Split the locator into the part we know and the part we don't: build an erasure locator over the missing
+points only (same shape as $g_0$, with fewer roots), $S(x) = \prod_j (x-\omega_j)$ for each erased index
+$j$, and let $E(x)$ cover only the genuinely unknown corruptions. With $\tilde{E}(x)=S(x)E(x)$ and
+$\tilde{Q}(x)=S(x)Q(x)$, Berlekamp-Welch reads:
 
-That is, we get $\tilde{E}(X)$ and $\tilde{Q}(X)$ and we can solve for them using GAO, we just need to do some corrections:
-First, bump the StopDegree by $deg(S(x))$, which is of-course the number of erasures.
+$$\tilde{E}(\omega_i)\cdot y_i = \tilde{E}(\omega_i)\cdot f(\omega_i) = \tilde{Q}(\omega_i) \qquad \forall i\in[n]$$
 
-Second, we need to get $g_1(x)\cdot S(x)$. This is a bit troublesome, since it will mean we need more points. Instead, we compute $\widetilde{g_1(x)}=g_1(x)S(x) \mod g_0(x)$. This is okay, since our wanted result is always $\bmod g_0(x)$.
+Every point is covered: at an erased $i$ we have $S(\omega_i)=0$, at a corrupted $i$ we have $E(\omega_i)=0$,
+and everywhere else $y_i=f(\omega_i)$. The first case is why the filler value is free — whatever we put at
+an erased point is annihilated by $S(\omega_i)=0$, so we use zeros, but any value decodes the same.
+
+So we can solve for $\tilde{E}(x)$ and $\tilde{Q}(x)$ with GAO, given two corrections:
+
+First, the stop degree determined by $Q$ is $e<\frac{n-k}{2}$; now we want to find $\tilde{Q}=S\cdot E \cdot f$. This polynomial has a particular degree, too; from RS theorem the degree $< \frac{s}{2}+e< \frac{n-k+1}/2$.
+So we bump the Stop degree by $s/2$.
+
+Second, we need $g_1(x)\cdot S(x)$. This is a bit troublesome, since a true product would need more points.
+Instead, we compute $\widetilde{g_1(x)}=g_1(x)S(x) \bmod g_0(x)$. This is okay, since our wanted result is
+always $\bmod\ g_0(x)$. In code this is done by scaling each received value by $S(\omega_i)$ before
+interpolating: the degree-$<n$ interpolant of $S(\omega_i)y_i$ *is* $g_1S \bmod g_0$.
+
+Because $\widetilde{g_1}$ already carries $S$, the Bézout coefficient that the partial GCD returns is the
+plain error locator: $\tilde{Q}\equiv E\cdot\widetilde{g_1} \pmod{g_0}$, so we get $g=\underbrace{u\cdot g_0}_{0} +v \cdot \tilde{E}$.
 
 In the no-erasure case, partial GCD gives $g/v = f$ directly.
-With erasures, partial GCD gives $g(x)/v=S(x)\cdot f(x)=\widetilde{f(x)}$, thus the return value is the division $\frac{\widetilde{f(x)}}{S(x)}$.
+With erasures, partial GCD gives $g(x)/v=\frac{S\cdot E\cdot f}{E}=S(x)\cdot f(x)=\widetilde{f(x)}$,
+thus the return value is one more division, $\frac{\widetilde{f(x)}}{S(x)}$.
 
 If either division leaves a remainder, the decoding assumptions are inconsistent and we return an error.
 
