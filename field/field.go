@@ -179,6 +179,9 @@ func (f *PrimeField) Pow(base, exp uint64) uint64 {
 	return x % mod
 }
 
+// Inverse returns the multiplicative inverse of e modulo the field prime.
+//
+// It panics if e is zero, which has no inverse. Guard the argument if it can be zero.
 func (f *PrimeField) Inverse(e uint64) uint64 {
 	// Fermat's little theorem: a^(p) = a (mod p)
 	// thus:

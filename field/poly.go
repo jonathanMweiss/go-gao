@@ -4,51 +4,38 @@
 package field
 
 import (
-	"math"
+	"errors"
 	"strconv"
 	"strings"
 )
 
+// Polynomials are built through PolyRing.NewPolynomial.
 type Polynomial struct {
 	f     Field
 	inner []uint64
 	isNTT bool
 }
 
-/*
-Polynomial expects the coefficients to be in the same field
-and ordered from lowest to highest degree. (e.g. [1, 2, 3] is 1 + 2x + 3x^2)
+var (
+	errModulusMismatch = errors.New("polynomials must be over the same field")
+	errNTTMismatch     = errors.New("polynomials must be both in NTT or both in coefficient representation")
+	errDegreeMismatch  = errors.New("polynomials must be of the same degree")
+)
 
-Can be point representation, generated from numerous evaluation points.
-*/
-func NewPolynomial(f Field, inner []uint64, isPointRepresentation bool) *Polynomial {
-	// validate inner are all in the same field
-	// validate inner
-	if len(inner) == 0 {
-		panic("empty polynomial")
-	}
-
-	return &Polynomial{
-		inner: inner,
-		isNTT: isPointRepresentation,
-		f:     f,
-	}
-}
-
-func preOpVerification(p, q *Polynomial) bool {
+func preOpVerification(p, q *Polynomial) error {
 	if p.f.Modulus() != q.f.Modulus() {
-		return false
+		return errModulusMismatch
 	}
 
 	if p.isNTT != q.isNTT {
-		return false
+		return errNTTMismatch
 	}
 
-	if p.isNTT {
-		return len(p.inner) == len(q.inner)
+	if p.isNTT && len(p.inner) != len(q.inner) {
+		return errDegreeMismatch
 	}
 
-	return true
+	return nil
 }
 
 func (p *Polynomial) IsZero() bool {
@@ -72,7 +59,7 @@ func (p *Polynomial) IsZero() bool {
 
 // Polynomial must be trim from leading zeros.
 func (p *Polynomial) Equals(q *Polynomial) bool {
-	if !preOpVerification(p, q) {
+	if err := preOpVerification(p, q); err != nil {
 		return false
 	}
 
@@ -90,6 +77,10 @@ func (p *Polynomial) Equals(q *Polynomial) bool {
 	return true
 }
 
+// Degree returns the degree of p, or -1 if p is the zero polynomial.
+//
+// Callers must treat a negative result as "no degree" before doing arithmetic on it;
+// the convention throughout this package is to test Degree() < 0.
 func (p *Polynomial) Degree() int {
 	return p.leadingCoeffPos()
 }
@@ -102,6 +93,9 @@ func (p *Polynomial) LeadCoeff() uint64 {
 	return 0
 }
 
+// leadingCoeffPos returns the index of the highest non-zero coefficient, or -1 when
+// every coefficient is zero. -1 rather than a large negative sentinel so that callers
+// computing degree differences cannot overflow.
 func (p *Polynomial) leadingCoeffPos() int {
 	for i := len(p.inner) - 1; i >= 0; i-- {
 		if p.inner[i] != 0 {
@@ -109,7 +103,7 @@ func (p *Polynomial) leadingCoeffPos() int {
 		}
 	}
 
-	return math.MinInt
+	return -1
 }
 
 func (p *Polynomial) removeLeadingZeroes() {
@@ -131,7 +125,7 @@ func (p *Polynomial) Copy() *Polynomial {
 	innercopy := make([]uint64, len(p.inner))
 	copy(innercopy, p.inner)
 
-	return NewPolynomial(p.f, innercopy, p.isNTT)
+	return &Polynomial{f: p.f, inner: innercopy, isNTT: p.isNTT}
 }
 
 // todo: fix

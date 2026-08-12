@@ -4,6 +4,9 @@
 package gao
 
 import (
+	"fmt"
+	"slices"
+
 	"github.com/jonathanmweiss/go-gao/field"
 )
 
@@ -20,23 +23,48 @@ func NewNttEvaluator(f field.Field) *NttEvaluator {
 	}
 }
 
+// supportsSize reports whether the field admits an NTT of length n, which requires n to
+// be a power of two of at least 2 that divides p-1. NewCodeParameters calls this so a
+// bad n surfaces as an error rather than a panic from inside Encode.
+func (e *NttEvaluator) supportsSize(n int) error {
+	if n <= 0 {
+		return errNonPositiveN
+	}
+
+	_, err := e.pr.GetField().GetRootOfUnity(uint64(n))
+
+	return err
+}
+
+// EvaluationPoints returns the n-th roots of unity used as evaluation points.
+// The returned slice is a copy: mutating it does not disturb the internal cache.
+//
+// It panics if the field does not admit an NTT of length n. Construct the code through
+// NewCodeParameters, which rejects such an n with ErrUnsupportedSize.
 func (e *NttEvaluator) EvaluationPoints(n int) []uint64 {
-	points := e.cache.loadPoints(n)
-	if points != nil {
+	return slices.Clone(e.evaluationPoints(n))
+}
+
+func (e *NttEvaluator) evaluationPoints(n int) []uint64 {
+	if points := e.cache.loadPoints(n); points != nil {
 		return points
+	}
+
+	if err := e.supportsSize(n); err != nil {
+		panic(fmt.Sprintf("gao: NttEvaluator cannot evaluate at %d points: %v", n, err))
 	}
 
 	// make polynomial p(x) = x.
 	// then attempt to compute its NTT.
 	inner := make([]uint64, n)
 	inner[1] = 1
-	p := field.NewPolynomial(e.pr.GetField(), inner, false)
+	p := e.pr.NewPolynomial(inner, false)
 
 	if err := e.pr.NttForward(p); err != nil {
-		panic(err) //. TODO: change API.
+		panic(fmt.Sprintf("gao: NTT of length %d failed: %v", n, err))
 	}
 
-	points = p.NoCopySlice()
+	points := p.NoCopySlice()
 
 	e.cache.storePoints(n, points)
 
@@ -63,10 +91,10 @@ func (e *NttEvaluator) GenerateLocatorPolynomial(n int) *field.Polynomial {
 	inner := make([]uint64, n+1)
 	inner[0] = f.Neg(1)
 	inner[n] = 1
-	return field.NewPolynomial(f, inner, false)
+	return e.pr.NewPolynomial(inner, false)
 }
 
-// does not support fast Gao.
+// supports fast Gao: decoding can invert the transform instead of interpolating.
 func (e *NttEvaluator) isNTT() bool {
 	return true
 }

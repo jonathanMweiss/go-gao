@@ -109,10 +109,10 @@ func TestHGCDSecondRecursionCoverage(t *testing.T) {
 	n := 300
 	fibs := make([]*Polynomial, n+1)
 	fibs[0] = makeConstantPoly(f, 1)
-	fibs[1] = NewPolynomial(f, []uint64{0, 1}, false)
+	fibs[1] = newPolynomial(f, []uint64{0, 1}, false)
 
 	for i := 2; i <= n; i++ {
-		xPoly := NewPolynomial(f, []uint64{0, 1}, false)
+		xPoly := newPolynomial(f, []uint64{0, 1}, false)
 		prod := &Polynomial{}
 		pr.Mul(xPoly, fibs[i-1], prod)
 		fibs[i] = &Polynomial{f: f}

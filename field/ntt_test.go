@@ -14,7 +14,7 @@ func TestNTTForward(t *testing.T) {
 	f, err := NewPrimeField(3329)
 	a.NoError(err)
 
-	p := NewPolynomial(f, []uint64{1, 2, 3, 4, 5, 6, 7, 8}, false)
+	p := newPolynomial(f, []uint64{1, 2, 3, 4, 5, 6, 7, 8}, false)
 	expected := []uint64{36, 3240, 3067, 427, 3325, 2894, 254, 81}
 
 	pr := NewDensePolyRing(f)

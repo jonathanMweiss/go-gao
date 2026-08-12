@@ -11,6 +11,10 @@ import (
 type PolyRing interface {
 	GetField() Field
 
+	// NewPolynomial builds a polynomial over this ring's field. Coefficients run from
+	// lowest to highest degree; an empty slice yields the zero polynomial.
+	NewPolynomial(inner []uint64, isPointRepresentation bool) *Polynomial
+
 	Evaluate(a *Polynomial, x uint64) uint64
 
 	// Assumes polynomial of valid degree.
@@ -29,6 +33,10 @@ type PolyRing interface {
 	// performs smart dispatch between schoolbook and NTT based
 	// on size and NTT support of the inner field.
 	Mul(a, b, c *Polynomial)
+
+	// Product multiplies a whole slice via a divide-and-conquer product tree,
+	// in O(n log^2 n). An empty slice yields the constant polynomial p(x) = 1.
+	Product(polys []*Polynomial) *Polynomial
 
 	// Creates quotient q and remainder r.
 	// chooses the algorithm based on size and NTT support of the inner field.
@@ -62,7 +70,13 @@ var nttMulScratchPool = sync.Pool{
 }
 
 // NewDensePolyRing constructs a ring over the provided coefficient field.
+//
+// It panics if f is nil.
 func NewDensePolyRing(f Field) PolyRing {
+	if f == nil {
+		panic("NewDensePolyRing: nil field")
+	}
+
 	return &DensePolyRing{
 		Field:        f,
 		twiddleCache: map[int]*twiddleSet{},
@@ -70,6 +84,61 @@ func NewDensePolyRing(f Field) PolyRing {
 }
 
 func (r *DensePolyRing) GetField() Field { return r.Field }
+
+// NewPolynomial builds a polynomial over this ring's field from coefficients ordered
+// from lowest to highest degree. An empty inner yields the zero polynomial.
+//
+// The polynomial takes ownership of inner rather than copying it.
+func (r *DensePolyRing) NewPolynomial(inner []uint64, isPointRepresentation bool) *Polynomial {
+	// An empty sum of terms is zero.
+	if len(inner) == 0 {
+		inner = []uint64{0}
+	}
+
+	return &Polynomial{
+		inner: inner,
+		isNTT: isPointRepresentation,
+		f:     r.Field,
+	}
+}
+
+// Product multiplies every polynomial in polys using a divide-and-conquer product tree,
+// in O(n log^2 n) with NTT-based multiplication rather than the O(n^2) of a running
+// product.
+//
+// An empty slice yields the constant polynomial p(x) = 1
+//
+// polys is only read; the result never aliases any of its elements.
+func (r *DensePolyRing) Product(polys []*Polynomial) *Polynomial {
+	switch len(polys) {
+	case 0:
+		return makeConstantPoly(r.Field, 1)
+	case 1:
+		// Copy, so the caller cannot mutate the result through the input slice.
+		return polys[0].Copy()
+	default:
+		return r.productTree(polys)
+	}
+}
+
+// productTree recurses over polys. At a leaf it hands back the caller's polynomial
+// uncopied, which is safe because Mul only ever reads its operands: the NTT path copies
+// both into scratch buffers before transforming, and the schoolbook path writes solely
+// to its output. Every internal node therefore returns a freshly allocated polynomial.
+func (r *DensePolyRing) productTree(polys []*Polynomial) *Polynomial {
+	if len(polys) == 1 {
+		return polys[0]
+	}
+
+	mid := len(polys) / 2
+	left := r.productTree(polys[:mid])
+	right := r.productTree(polys[mid:])
+
+	res := &Polynomial{}
+	r.Mul(left, right, res)
+
+	return res
+}
 
 // ---------- utilities ----------
 
@@ -105,11 +174,10 @@ func (r *DensePolyRing) trimTrailingZeros(p *Polynomial) {
 }
 
 // ---------- Poly ops ----------
-func (r *DensePolyRing) Evaluate(a *Polynomial, x uint64) uint64 {
-	if a.isNTT {
-		panic("Evaluate not supported in NTT domain")
-	}
 
+// Evaluate returns a(x) by Horner's rule.
+// should receive a polynomial in coefficient form, not NTT form.
+func (r *DensePolyRing) Evaluate(a *Polynomial, x uint64) uint64 {
 	result := uint64(0)
 	fld := r.Field
 
@@ -121,6 +189,7 @@ func (r *DensePolyRing) Evaluate(a *Polynomial, x uint64) uint64 {
 	return result
 }
 
+// MulScalar computes c = a * scalar, preserving a's domain. c may alias a.
 func (r *DensePolyRing) MulScalar(a *Polynomial, scalar uint64, c *Polynomial) {
 	s := r.Reduce(scalar)
 	f := r.GetField()
@@ -136,9 +205,12 @@ func (r *DensePolyRing) MulScalar(a *Polynomial, scalar uint64, c *Polynomial) {
 	r.trimTrailingZeros(c)
 }
 
+// Add computes c = a + b. c may alias a or b.
+//
+// It panics if a and b are over different fields or in different domains.
 func (r *DensePolyRing) Add(a, b, c *Polynomial) {
-	if !preOpVerification(a, b) {
-		panic("preOpVerification failed")
+	if err := preOpVerification(a, b); err != nil {
+		panic(err)
 	}
 
 	alen := len(a.inner)
@@ -170,9 +242,12 @@ func (r *DensePolyRing) Add(a, b, c *Polynomial) {
 	r.trimTrailingZeros(c)
 }
 
+// Sub computes c = a - b. c may alias a or b.
+//
+// It panics if a and b are over different fields or in different domains.
 func (r *DensePolyRing) Sub(a, b, c *Polynomial) {
-	if !preOpVerification(a, b) {
-		panic("preOpVerification failed")
+	if err := preOpVerification(a, b); err != nil {
+		panic(err)
 	}
 
 	c.f = r.Field
@@ -205,9 +280,12 @@ func (r *DensePolyRing) Sub(a, b, c *Polynomial) {
 	r.trimTrailingZeros(c)
 }
 
+// Mul computes c = a * b, choosing between schoolbook and NTT-based multiplication by size.
+//
+// It panics if a and b are over different fields or in different domains.
 func (r *DensePolyRing) Mul(a, b, c *Polynomial) {
-	if !preOpVerification(a, b) {
-		panic("preOpVerification failed")
+	if err := preOpVerification(a, b); err != nil {
+		panic(err)
 	}
 
 	la, lb := len(a.inner), len(b.inner)
@@ -238,8 +316,8 @@ func (r *DensePolyRing) Mul(a, b, c *Polynomial) {
 }
 
 func (r *DensePolyRing) mulSchoolbook(a, b, c *Polynomial) {
-	if !preOpVerification(a, b) {
-		panic("preOpVerification failed")
+	if err := preOpVerification(a, b); err != nil {
+		panic(err)
 	}
 
 	if a.isNTT || b.isNTT {
@@ -290,16 +368,26 @@ func (r *DensePolyRing) monomialMultPoly(ai uint64, deg int, p *Polynomial) *Pol
 		prod[i+deg] = fld.Mul(ai, p.inner[i])
 	}
 
-	return NewPolynomial(fld, prod, p.isNTT)
+	return r.NewPolynomial(prod, p.isNTT)
 }
 
+// Div returns the quotient and remainder of a divided by b, choosing between schoolbook
+// and NTT-based division by size.
+//
+// similar to standard division, this function panics when its input doesn't make sense:
+// a or b must not be nil, or in the NTT domain; they must have the same field, and
+// b must not be the zero polynomial.
 func (r *DensePolyRing) Div(a, b *Polynomial) (q *Polynomial, rem *Polynomial) {
-	if !preOpVerification(a, b) {
-		return nil, nil
+	if a == nil || b == nil {
+		panic("Div: nil polynomial")
 	}
 
-	if a == nil || b == nil || a.isNTT || b.isNTT {
-		return nil, nil
+	if err := preOpVerification(a, b); err != nil {
+		panic(err)
+	}
+
+	if a.isNTT || b.isNTT {
+		panic("Div expects coefficient-domain polynomials")
 	}
 
 	bDeg := b.Degree()
@@ -331,13 +419,13 @@ func (r *DensePolyRing) Div(a, b *Polynomial) (q *Polynomial, rem *Polynomial) {
 //
 // returns q, r such that p = q*v + r.
 func (r *DensePolyRing) divSchoolbook(a, b *Polynomial) (q *Polynomial, rem *Polynomial) {
-	if !preOpVerification(a, b) {
-		return nil, nil
+	if err := preOpVerification(a, b); err != nil {
+		panic(err)
 	}
 	fld := r.Field
 
 	if b.isNTT {
-		return nil, nil
+		panic("divSchoolbook expects coefficient-domain polynomials")
 	}
 
 	n, m := a.Degree(), b.Degree()
@@ -359,18 +447,14 @@ func (r *DensePolyRing) divSchoolbook(a, b *Polynomial) (q *Polynomial, rem *Pol
 
 	r.trimTrailingZeros(rem)
 
-	if len(qInner) == 0 {
-		qInner = []uint64{0}
-	}
-
-	q = NewPolynomial(fld, qInner, false)
+	q = r.NewPolynomial(qInner, false)
 	q.removeLeadingZeroes()
 
 	return q, rem
 }
 
 func makeConstantPoly(f Field, u uint64) *Polynomial {
-	return NewPolynomial(f, []uint64{u}, false)
+	return &Polynomial{f: f, inner: []uint64{u}, isNTT: false}
 }
 
 func polyZero(f Field) *Polynomial {
@@ -520,8 +604,8 @@ func nextPow2(n int) int {
 }
 
 func (r *DensePolyRing) mulViaNTT(a, b, c *Polynomial) {
-	if !preOpVerification(a, b) {
-		panic("preOpVerification failed")
+	if err := preOpVerification(a, b); err != nil {
+		panic(err)
 	}
 
 	// else, use mulTrunc with total length (coeff-domain out)
@@ -1094,5 +1178,5 @@ func (r *DensePolyRing) shiftRight(p *Polynomial, m int) *Polynomial {
 	if m >= len(p.inner) {
 		return polyZero(r.Field)
 	}
-	return NewPolynomial(r.Field, p.inner[m:], false)
+	return r.NewPolynomial(p.inner[m:], false)
 }

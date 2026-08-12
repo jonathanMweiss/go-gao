@@ -18,8 +18,8 @@ func TestMonomialQuickDiv(t *testing.T) {
 
 	pr := NewDensePolyRing(f)
 	t.Run("simple", func(t *testing.T) {
-		m1 := NewPolynomial(f, []uint64{5, 1}, false)
-		m2 := NewPolynomial(f, []uint64{3, 1}, false)
+		m1 := newPolynomial(f, []uint64{5, 1}, false)
+		m2 := newPolynomial(f, []uint64{3, 1}, false)
 
 		m := &Polynomial{}
 		pr.Mul(m1, m2, m)
@@ -48,7 +48,7 @@ func TestMonomialQuickDiv(t *testing.T) {
 		intr := NewInterpolator(pr)
 
 		miSlice := intr.createMiSlice(xs)
-		m := PolyProduct(pr, miSlice)
+		m := pr.Product(miSlice)
 
 		for _, mi := range miSlice {
 			qQuickDiv := intr.mDivMi(m, mi)
@@ -67,7 +67,7 @@ func TestInterpolation(t *testing.T) {
 	pr := NewDensePolyRing(f)
 
 	coeffs := []uint64{0, 1, 2}
-	p := NewPolynomial(f, coeffs, false)
+	p := newPolynomial(f, coeffs, false)
 
 	intr := NewInterpolator(pr)
 
@@ -139,7 +139,7 @@ func BenchmarkMDivMi(b *testing.B) {
 	intr := NewInterpolator(pr)
 
 	miSlice := intr.createMiSlice(xs)
-	m := PolyProduct(pr, miSlice)
+	m := pr.Product(miSlice)
 
 	mi := miSlice[0]
 
@@ -189,7 +189,7 @@ func BenchmarkPolyProductComparison(b *testing.B) {
 		miSlice := intr.createMiSlice(xs)
 
 		// Sanity check once per case so benchmarked runs only measure performance.
-		tree := PolyProduct(pr, miSlice)
+		tree := pr.Product(miSlice)
 		linear := simplePolyProduct(pr, miSlice)
 		if !tree.Equals(linear) {
 			b.Fatalf("mismatch for n=%d", n)
@@ -199,7 +199,7 @@ func BenchmarkPolyProductComparison(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_ = PolyProduct(pr, miSlice)
+				_ = pr.Product(miSlice)
 			}
 		})
 

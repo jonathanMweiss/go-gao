@@ -5,33 +5,11 @@ package gao
 
 import (
 	"errors"
+	"fmt"
+	"slices"
 
 	"github.com/jonathanmweiss/go-gao/field"
 )
-
-type Coder interface {
-	EvaluationMap
-
-	// redundancy value
-	N() int
-
-	// data size
-	K() int
-
-	// maximum number of errors that can be corrected, assuming no erasures.
-	// Each erasure consumes half of this budget.
-	MaxErrors() int
-}
-
-type Decoder interface {
-	Coder
-	Decode(encodedData map[uint64]uint64) ([]uint64, error)
-}
-
-type Encoder interface {
-	Coder
-	Encode(data []uint64) (map[uint64]uint64, error)
-}
 
 type CodeParams struct {
 	EvaluationMap
@@ -51,23 +29,46 @@ type Code struct {
 	stopDegree int
 }
 
+// N returns the codeword length: the number of evaluation points the encoder emits.
 func (c *CodeParams) N() int {
 	return c.n
 }
 
+// K returns the message length: the number of data symbols carried by a codeword.
 func (c *CodeParams) K() int {
 	return c.k
 }
 
+// MaxErrors returns the number of corrupted symbols the code can repair when their
+// positions are unknown, (n-k)/2. Erasures are cheaper: each one costs half an error,
+// so a decode succeeds while 2*errors+erasures <= n-k.
 func (c *CodeParams) MaxErrors() int {
 	return c.maxErrors
 }
 
-var ErrNSmallerThanK = errors.New("redundancy value `n` must be greater than or equal to data size `k`")
+var (
+	ErrNSmallerThanK   = errors.New("redundancy value `n` must be greater than or equal to data size `k`")
+	ErrNonPositiveK    = errors.New("data size `k` must be positive")
+	ErrUnsupportedSize = errors.New("evaluation map does not support the requested codeword length `n`")
+)
 
+// NewCodeParameters validates n and k against the evaluation map and returns the
+// parameters for a code that carries k data symbols in an n-symbol codeword.
+//
+// It returns ErrNonPositiveK if k <= 0, ErrNSmallerThanK if n < k, and
+// ErrUnsupportedSize if e cannot produce n evaluation points — which for
+// NttEvaluator means n must be a power of two dividing p-1.
 func NewCodeParameters(e EvaluationMap, n, k int) (CodeParams, error) {
+	if k <= 0 {
+		return CodeParams{}, ErrNonPositiveK
+	}
+
 	if n < k {
 		return CodeParams{}, ErrNSmallerThanK
+	}
+
+	if err := e.supportsSize(n); err != nil { // ensuring support for size n
+		return CodeParams{}, fmt.Errorf("%w: n=%d: %w", ErrUnsupportedSize, n, err)
 	}
 
 	return CodeParams{
@@ -78,11 +79,14 @@ func NewCodeParameters(e EvaluationMap, n, k int) (CodeParams, error) {
 	}, nil
 }
 
+// NewCodeGao builds a Reed-Solomon code that decodes with Gao's algorithm from
+// parameters already validated by NewCodeParameters.
+//
+// The returned *Code is safe for concurrent use by multiple goroutines.
 func NewCodeGao(c CodeParams) *Code {
 	fld := c.EvaluationMap.PrimeField()
 	pr := field.NewDensePolyRing(fld)
 	// create g0(x) = (x - x_1)(x - x_2)...(x - x_n)
-	// TODO: for FastEvaluationMaps, we can skip this step, and create g0 without computing it.
 
 	return &Code{
 		CodeParams:   c,
@@ -90,15 +94,6 @@ func NewCodeGao(c CodeParams) *Code {
 		g0:           c.EvaluationMap.GenerateLocatorPolynomial(c.N()),
 		interpolator: field.NewInterpolator(pr),
 		stopDegree:   (c.N() + c.K()) / 2,
-	}
-}
-
-func (gao *Code) Copy() *Code {
-	return &Code{
-		CodeParams:   gao.CodeParams,
-		pr:           gao.pr,
-		interpolator: gao.interpolator,
-		stopDegree:   gao.stopDegree,
 	}
 }
 
@@ -112,7 +107,7 @@ func (gao *Code) Encode(data []uint64) (map[uint64]uint64, error) {
 	}
 
 	// create map of points.
-	xs := gao.EvaluationMap.EvaluationPoints(gao.N())
+	xs := gao.EvaluationMap.evaluationPoints(gao.N())
 	points := make(map[uint64]uint64, gao.N())
 
 	for i, y := range ys {
@@ -126,14 +121,23 @@ var ErrTooManyMissingPoints = errors.New("too many missing points")
 var ErrTooManyPoints = errors.New("too many evaluated points")
 var ErrDecoding = errors.New("decoding error")
 
-// Decode cannot correct more than (n-k)/2 errors, and cannot detect more than n-k errors.
-// If the number of errors exceeds (n-k)/2, correction is not guaranteed.
-// Points omitted from `received` are treated as erasures. An erasure costs half of what an
+// Decode recovers the original message from received evaluation points, repairing both
+// corrupted values and missing ones.
 //
-// Notice: Decode writes zero entries into `received` for every omitted point, and may modify
-// the values it holds.
+// Points omitted from the input map `received` are treated as erasures, whose positions are therefore
+// known.
+// Since this is a Reed-Solomon code, the amount of errors and
+// erasures must satisfy $2*errors + erasures <= n-k$; beyond that, correction
+// is not guaranteed: Decode
+//
+// returns ErrDecoding if it detects an inconsistency, but with enough errors a codeword
+// can be pushed closer to a different valid codeword, in which case it returns a
+// confidently wrong message.
+//
+// It returns ErrTooManyPoints if received holds more than n entries,
+// ErrTooManyMissingPoints if more than n-k are absent, and ErrDecoding if no message is
+// consistent with the points given.
 func (gao *Code) Decode(received map[uint64]uint64) ([]uint64, error) {
-	// fill missing evaluated points with 0.
 	xs, ys, erased, err := gao.prepareDecoding(received)
 	if err != nil {
 		return nil, err
@@ -185,25 +189,27 @@ func (gao *Code) prepareDecoding(toDecode map[uint64]uint64) ([]uint64, []uint64
 		return nil, nil, nil, ErrTooManyPoints
 	}
 
-	numMissing := 0
 	erasedIndices := make([]int, 0)
 
-	xs := gao.EvaluationMap.EvaluationPoints(gao.N())
-	for i, x := range xs {
-		if _, ok := toDecode[x]; !ok {
-			toDecode[x] = 0
-			numMissing += 1
-			erasedIndices = append(erasedIndices, i)
-		}
-	}
-
-	if numMissing > gao.N()-gao.K() {
-		return nil, nil, nil, ErrTooManyMissingPoints
-	}
-
+	xs := gao.EvaluationMap.evaluationPoints(gao.N())
 	ys := make([]uint64, gao.N())
+
+	// ys follows the order of the EvaluationMap's evaluation points. A point absent from
+	// toDecode is an erasure: it stays zero here, which the decoder is free to do because
+	// the erasure locator annihilates whatever value sits at an erased position.
 	for i, x := range xs {
-		ys[i] = toDecode[x] // according to the order of the EvaluationMap's EvaluationPoints.
+		y, ok := toDecode[x]
+		if !ok {
+			erasedIndices = append(erasedIndices, i)
+
+			continue
+		}
+
+		ys[i] = y
+	}
+
+	if len(erasedIndices) > gao.N()-gao.K() {
+		return nil, nil, nil, ErrTooManyMissingPoints
 	}
 
 	return xs, ys, erasedIndices, nil
@@ -274,7 +280,7 @@ func (gao *Code) decodeNTT(ys, xs []uint64, erased []int) (*field.Polynomial, *f
 		// Evaluate S(x) at all points xs
 		sInner := make([]uint64, gao.N())
 		copy(sInner, S.NoCopySlice())
-		Spoly := field.NewPolynomial(fld, sInner, false)
+		Spoly := gao.pr.NewPolynomial(sInner, false)
 		if err := gao.pr.NttForward(Spoly); err != nil {
 			return nil, nil, err
 		}
@@ -288,7 +294,7 @@ func (gao *Code) decodeNTT(ys, xs []uint64, erased []int) (*field.Polynomial, *f
 		stopDegree = (gao.N() + gao.K() + len(erased)) / 2
 	}
 
-	g1 := field.NewPolynomial(gao.pr.GetField(), ys, true)
+	g1 := gao.pr.NewPolynomial(ys, true)
 	if err := gao.pr.NttBackward(g1); err != nil {
 		return nil, nil, err
 	}
@@ -330,15 +336,13 @@ func (gao *Code) decodeNTT(ys, xs []uint64, erased []int) (*field.Polynomial, *f
 // FastPartialGCD path: the message trimmed to its degree and a zero remainder, so sliceDecode's guard and the
 // callers see identical output. deg(g1) < 0 is the all-zero message.
 func (gao *Code) codewordMessage(g1 *field.Polynomial) (f, r *field.Polynomial) {
-	fld := gao.pr.GetField()
-
 	coeffs := []uint64{0}
 	if deg := g1.Degree(); deg >= 0 {
 		coeffs = g1.ToSlice()[:deg+1]
 	}
 
-	f = field.NewPolynomial(fld, coeffs, false)
-	r = field.NewPolynomial(fld, []uint64{0}, false)
+	f = gao.pr.NewPolynomial(coeffs, false)
+	r = gao.pr.NewPolynomial(nil, false)
 
 	return f, r
 }
@@ -354,11 +358,11 @@ func (gao *Code) createErasureLocator(erasedIndices []int, xs []uint64) *field.P
 		coeffs := make([]uint64, 2)
 		coeffs[1] = 1
 		coeffs[0] = f.Neg(f.Reduce(xs[idx]))
-		polys[i] = field.NewPolynomial(f, coeffs, false)
+		polys[i] = gao.pr.NewPolynomial(coeffs, false)
 	}
 
 	// complexity: O(n log^2 n)
-	return field.PolyProduct(gao.pr, polys)
+	return gao.pr.Product(polys)
 }
 
 func (gao *Code) EncodeToSlice(data []uint64) ([]uint64, error) {
@@ -381,7 +385,7 @@ func (gao *Code) EncodeToSlice(data []uint64) ([]uint64, error) {
 	copy(paddedData, data)
 
 	// create polynomial from data.
-	p := field.NewPolynomial(f, paddedData, false)
+	p := gao.pr.NewPolynomial(paddedData, false)
 	// evaluate polynomial at n points.
 
 	ys, err := gao.EvaluationMap.EvaluatePolynomial(p)
@@ -392,8 +396,18 @@ func (gao *Code) EncodeToSlice(data []uint64) ([]uint64, error) {
 	return ys, nil
 }
 
-// Notice: This might change the input slice (depending on the EvaluationMap used).
-// TODO: Change API to receive XS, YS so that we can infer erasures from missing points, and so that we can avoid modifying the input slice.
+// DecodeFromSlice is the positional form of Decode: ys holds one value per evaluation
+// point, in the order EvaluationPoints returns them, so it cannot express erasures —
+// every position carries a value. Use Decode when some points are missing.
+//
+// It returns ErrMismatchedLengths unless len(ys) == n. DecodeFromSlice never modifies ys.
 func (gao *Code) DecodeFromSlice(ys []uint64) ([]uint64, error) {
-	return gao.sliceDecode(gao.EvaluationMap.EvaluationPoints(gao.N()), ys, nil)
+	if len(ys) != gao.N() {
+		return nil, ErrMismatchedLengths
+	}
+
+	// sliceDecode reduces and transforms ys in place, so hand it a copy.
+	work := slices.Clone(ys)
+
+	return gao.sliceDecode(gao.EvaluationMap.evaluationPoints(gao.N()), work, nil)
 }

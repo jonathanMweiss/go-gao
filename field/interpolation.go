@@ -35,7 +35,7 @@ func (intr *Interpolator) Interpolate(xs, ys []uint64) (*Polynomial, error) {
 	miSlice := intr.createMiSlice(xs)
 
 	// updated to O(nlog^2n) total cost, since we are multiplying n polynomials of degree 1.
-	m := PolyProduct(intr.pr, miSlice)
+	m := intr.pr.Product(miSlice)
 
 	liSlice := make([]Polynomial, len(xs))
 
@@ -61,36 +61,6 @@ func (intr *Interpolator) Interpolate(xs, ys []uint64) (*Polynomial, error) {
 	return intr.similarDegreePolySum(liSlice), nil
 }
 
-// PolyProduct multiplies a slice of polynomials using a divide-and-conquer product tree.
-// Complexity: O(n log^2 n) with NTT-based multiplication.
-func PolyProduct(pr PolyRing, miSlice []*Polynomial) *Polynomial {
-	n := len(miSlice)
-	if n == 0 {
-		return makeConstantPoly(pr.GetField(), 1)
-	}
-	if n == 1 {
-		return miSlice[0].Copy()
-	}
-
-	// Recursive divide-and-conquer
-	return polyProductRecursive(pr, miSlice)
-}
-
-func polyProductRecursive(pr PolyRing, polys []*Polynomial) *Polynomial {
-	n := len(polys)
-	if n == 1 {
-		return polys[0]
-	}
-
-	mid := n / 2
-	left := polyProductRecursive(pr, polys[:mid])
-	right := polyProductRecursive(pr, polys[mid:])
-
-	res := &Polynomial{}
-	pr.Mul(left, right, res)
-	return res
-}
-
 // similarDegreePolySum sums polynomials of the same degree.
 func (intr *Interpolator) similarDegreePolySum(polys []Polynomial) *Polynomial {
 	inner := make([]uint64, len(polys[0].inner))
@@ -101,8 +71,7 @@ func (intr *Interpolator) similarDegreePolySum(polys []Polynomial) *Polynomial {
 		}
 	}
 
-	return NewPolynomial(fld, inner, false)
-
+	return intr.pr.NewPolynomial(inner, false)
 }
 
 // createMiSlice creates the m_i(x) = (x - x_i) polynomials.
@@ -115,7 +84,7 @@ func (intr *Interpolator) createMiSlice(xs []uint64) []*Polynomial {
 		miInner[0] = f.Neg(f.Reduce(x))
 		miInner[1] = 1
 
-		miSlice[i] = NewPolynomial(f, miInner, false)
+		miSlice[i] = intr.pr.NewPolynomial(miInner, false)
 	}
 
 	return miSlice
@@ -142,7 +111,7 @@ func (intr *Interpolator) mDivMi(m_, mi_ *Polynomial) *Polynomial {
 		m.inner[i-1] = f.Add(tmp, m.inner[i-1])
 	}
 
-	return NewPolynomial(f, qinner, false)
+	return intr.pr.NewPolynomial(qinner, false)
 }
 
 func validateInterpolationPoints(xs []uint64, ys []uint64) error {

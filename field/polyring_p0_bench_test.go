@@ -20,7 +20,7 @@ func randomPolyWithDegree(f Field, degree int, rng *rand.Rand) *Polynomial {
 	if coeffs[degree] == 0 {
 		coeffs[degree] = 1
 	}
-	return NewPolynomial(f, coeffs, false)
+	return newPolynomial(f, coeffs, false)
 }
 
 // Baseline copy of old mulTrunc implementation before optimization.
