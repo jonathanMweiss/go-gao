@@ -61,11 +61,9 @@ See the unit tests for further examples.
 
 ## Planned Improvements:
 
-- Optimised decoding for erasure only (erasure only faults decrease redundancies).
 - Remove the Lattigo import by implementing a prime factorization algorithm.
 
 ## Explanation about the decoding logic
-Decode explanation.
 GAO used a strong assumption:
 If there is a fix to the polynomial, it'll look like Berlekamp-Welch equation:
 $E(\omega_i)*f(\omega_i) = Q(\omega_i)$ for $i\in[n]$.
@@ -88,20 +86,23 @@ Since it has the same properties of $Q$, and it has the same degree, it must be 
 
 If there is a remainder, then GAO's strong assumption is violated, meaning there is no solution to $Q=Ey_i$, and thus we return an error.
 
-AI Generated explanation for Decoding with erasures:
-Decode with erasures (known missing points):
-Let $U(x)=$ product over erased indices $j$ of $(x - \omega_j)$. This is the erasure locator.
-We multiply every received value by $U(\omega_i)$, so:
 
-	$y'_i = U(\omega_i) * y_i$
 
-and interpolate $g1$ from $(\omega_i, y'_i)$.
+### Decode with erasures (known missing points):
+Adding erasures uses similar ideas, in recursion!
+When we have points that we know are missing, we create a specialized erasure locator (similar to g_0, but just for erasures): $S(x) = \prod (x-\omega_j)$ for each erased $j$  (same shape as g_0, with less points).
+Now, when we multiply $S(x)$ with the berlekamp-welch equation from both sides we get:
 
-For non-erased points, $y_i$ still matches $f(\omega_i)$, so $y'_i = U(\omega_i)*f(\omega_i)$.
-For erased points, $U(\omega_i)=0$ by construction, so $y'_i=0$ and those constraints are neutralized.
+$$\underbrace{ S(\omega_i)E(\omega_i)}_{\tilde{E}(x)}\cdot f(\omega_i) = \underbrace{S(\omega_i)Q(\omega_i)}_{\tilde{Q}(x)} $$
+
+That is, we get $\tilde{E}(X)$ and $\tilde{Q}(X)$ and we can solve for them using GAO, we just need to do some corrections:
+First, bump the StopDegree by $deg(S(x))$, which is of-course the number of erasures.
+
+Second, we need to get $g_1(x)\cdot S(x)$. This is a bit troublesome, since it will mean we need more points. Instead, we compute $\widetilde{g_1(x)}=g_1(x)S(x) \mod g_0(x)$. This is okay, since our wanted result is always $\bmod g_0(x)$.
 
 In the no-erasure case, partial GCD gives $g/v = f$ directly.
-With erasures, partial GCD gives $g/v = U * f$, so we divide once more by $U$.
+With erasures, partial GCD gives $g(x)/v=S(x)\cdot f(x)=\widetilde{f(x)}$, thus the return value is the division $\frac{\widetilde{f(x)}}{S(x)}$.
+
 If either division leaves a remainder, the decoding assumptions are inconsistent and we return an error.
 
 ## Contributing
