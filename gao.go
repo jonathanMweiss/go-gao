@@ -18,7 +18,8 @@ type Coder interface {
 	// data size
 	K() int
 
-	// maximum number of errors that can be corrected.
+	// maximum number of errors that can be corrected, assuming no erasures.
+	// Each erasure consumes half of this budget.
 	MaxErrors() int
 }
 
@@ -127,6 +128,10 @@ var ErrDecoding = errors.New("decoding error")
 
 // Decode cannot correct more than (n-k)/2 errors, and cannot detect more than n-k errors.
 // If the number of errors exceeds (n-k)/2, correction is not guaranteed.
+// Points omitted from `received` are treated as erasures. An erasure costs half of what an
+//
+// Notice: Decode writes zero entries into `received` for every omitted point, and may modify
+// the values it holds.
 func (gao *Code) Decode(received map[uint64]uint64) ([]uint64, error) {
 	// fill missing evaluated points with 0.
 	xs, ys, erased, err := gao.prepareDecoding(received)
@@ -206,17 +211,19 @@ func (gao *Code) prepareDecoding(toDecode map[uint64]uint64) ([]uint64, []uint64
 
 // full intuitive explanation in README.md
 func (gao *Code) decodeGeneric(ys []uint64, xs []uint64, erased []int) (*field.Polynomial, *field.Polynomial, error) {
-	var E *field.Polynomial
+	var S *field.Polynomial
+
 	stopDegree := gao.stopDegree
 	fld := gao.pr.GetField()
 
 	if len(erased) > 0 {
-		E = gao.createErasureLocator(erased, xs)
-		// scale ys by E(xi)
+		S = gao.createErasureLocator(erased, xs)
+		// scale ys by S(xi). interpolating the scaled values yields g1*S mod g0 (see README.md for reason).
 		for i, x := range xs {
-			valE := gao.pr.Evaluate(E, x)
-			ys[i] = fld.Mul(ys[i], valE)
+			valS := gao.pr.Evaluate(S, x)
+			ys[i] = fld.Mul(ys[i], valS)
 		}
+		// each erasure raises the stop degree by half of what an error does.
 		stopDegree = (gao.N() + gao.K() + len(erased)) / 2
 	}
 
@@ -241,13 +248,13 @@ func (gao *Code) decodeGeneric(ys []uint64, xs []uint64, erased []int) (*field.P
 	g, _, v := pr.FastPartialGCD(gao.g0, g1, stopDegree)
 
 	if len(erased) > 0 {
-		// G = g/v
+		// after FastPartialGCD, g = S*v*f. We remove v, then S.
 		G, remG := pr.Div(g, v)
 		if !remG.IsZero() {
 			return nil, nil, ErrDecoding
 		}
-		// f = G/E
-		f, remF := pr.Div(G, E)
+		// remove S:
+		f, remF := pr.Div(G, S)
 		return f, remF, nil
 	}
 
@@ -257,25 +264,26 @@ func (gao *Code) decodeGeneric(ys []uint64, xs []uint64, erased []int) (*field.P
 }
 
 func (gao *Code) decodeNTT(ys, xs []uint64, erased []int) (*field.Polynomial, *field.Polynomial, error) {
-	var E *field.Polynomial
+	var S *field.Polynomial
 	stopDegree := gao.stopDegree
 	fld := gao.pr.GetField()
 
 	if len(erased) > 0 {
-		E = gao.createErasureLocator(erased, xs)
+		S = gao.createErasureLocator(erased, xs)
 
-		// Evaluate E(x) at all points xs
-		eInner := make([]uint64, gao.N())
-		copy(eInner, E.NoCopySlice())
-		Epoly := field.NewPolynomial(fld, eInner, false)
-		if err := gao.pr.NttForward(Epoly); err != nil {
+		// Evaluate S(x) at all points xs
+		sInner := make([]uint64, gao.N())
+		copy(sInner, S.NoCopySlice())
+		Spoly := field.NewPolynomial(fld, sInner, false)
+		if err := gao.pr.NttForward(Spoly); err != nil {
 			return nil, nil, err
 		}
-		eVals := Epoly.NoCopySlice()
+		sVals := Spoly.NoCopySlice()
 
-		// scale ys by E(xi)
+		// (see README.md for reason)
+		// scale ys by S(xi): the inverse NTT below then yields (g1*S mod g0).
 		for i := range ys {
-			ys[i] = fld.Mul(ys[i], eVals[i])
+			ys[i] = fld.Mul(ys[i], sVals[i])
 		}
 		stopDegree = (gao.N() + gao.K() + len(erased)) / 2
 	}
@@ -301,13 +309,13 @@ func (gao *Code) decodeNTT(ys, xs []uint64, erased []int) (*field.Polynomial, *f
 	g, _, v := pr.FastPartialGCD(gao.g0, g1, stopDegree)
 
 	if len(erased) > 0 {
-		// G = g/v
+		// after FastPartialGCD, g = S*v*f. We remove v, then S.
 		G, remG := pr.Div(g, v)
 		if !remG.IsZero() {
 			return nil, nil, ErrDecoding
 		}
-		// f = G/E
-		f, remF := pr.Div(G, E)
+		// remove S:
+		f, remF := pr.Div(G, S)
 		return f, remF, nil
 	}
 
@@ -335,8 +343,10 @@ func (gao *Code) codewordMessage(g1 *field.Polynomial) (f, r *field.Polynomial) 
 	return f, r
 }
 
-// create the erasure locator polynomial E(x) = product of (x - xi) for xi an evaluation point corresponding to an erased index.
+// create the erasure locator polynomial S(x) = product of (x - xi) for xi an evaluation point corresponding to an erased index.
 // This is similar to the locator Polynomial g0=product of (x - xi) for all evaluation points, but only for the erased indices.
+// Note S(x) is distinct from the error locator E(x) of the README: E is never formed explicitly, it
+// falls out of the partial GCD as the Bezout coefficient v.
 func (gao *Code) createErasureLocator(erasedIndices []int, xs []uint64) *field.Polynomial {
 	f := gao.pr.GetField()
 	polys := make([]*field.Polynomial, len(erasedIndices))
