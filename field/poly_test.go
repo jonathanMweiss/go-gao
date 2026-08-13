@@ -5,6 +5,7 @@ package field
 
 import (
 	"fmt"
+	"math/rand"
 	"testing"
 	"time"
 
@@ -365,10 +366,31 @@ func newPolynomial(f Field, inner []uint64, isPointRepresentation bool) *Polynom
 	return &Polynomial{f: f, inner: inner, isNTT: isPointRepresentation}
 }
 
+// randomPolynomial builds a pseudo-random polynomial of the given degree, deterministic
+// in seed.
+//
+// It must be genuinely random. It previously used coefficients seed, seed+1, seed+2,
+// ... — an arithmetic progression, which (1-x)^2 nearly annihilates. Such polynomials
+// have a Euclidean remainder sequence that collapses in 3 steps at any size, so every
+// GCD test and benchmark built on them was exercising a degenerate case: the benchmarks
+// made the half-GCD look 3x slower than the iterative version when it is in fact
+// several times faster on realistic input.
 func randomPolynomial(f Field, seed uint64, maxDegree int) *Polynomial {
+	if maxDegree <= 0 {
+		return newPolynomial(f, nil, false)
+	}
+
+	rng := rand.New(rand.NewSource(int64(seed)))
+
 	coefficients := make([]uint64, maxDegree)
-	for i := 0; i < maxDegree; i++ {
-		coefficients[i] = f.Reduce(seed + uint64(i))
+	for i := range coefficients {
+		coefficients[i] = f.Reduce(rng.Uint64())
+	}
+
+	// Keep the degree deterministic: a zero leading coefficient would silently shorten
+	// the polynomial and make degree-dependent assertions flaky.
+	if coefficients[maxDegree-1] == 0 {
+		coefficients[maxDegree-1] = 1
 	}
 
 	return newPolynomial(f, coefficients, false)

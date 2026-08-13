@@ -71,7 +71,7 @@ func BenchmarkGCDScaling(b *testing.B) {
 	pr := NewDensePolyRing(f).(*DensePolyRing)
 
 	// Test across a range of degrees to see the crossover point and scaling.
-	degrees := []int{128, 512, 2048, 8192, 16384}
+	degrees := []int{128, 512, 2048, 8192, 16384, 32768, 65536}
 
 	for _, n := range degrees {
 		// Prepare inputs: a and b such that a target reduction is needed.
