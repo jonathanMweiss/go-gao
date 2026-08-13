@@ -973,9 +973,12 @@ Terminology:
 - Transition Matrix M: A 2x2 matrix such that [r_i, r_{i+1}]^T = M * [a, b]^T.
 */
 
-// hgcdThreshold is the degree below which the overhead of recursion exceeds the
-// benefits of the divide-and-conquer approach.
-const hgcdThreshold = 128
+// hgcdThreshold is the degree at which the half-GCD recursion bottoms out into the
+// iterative routine, below which the recursion overhead exceeds its benefit.
+//
+// 256 chosen empirically: measured best or tied-best against 128, 512, 1024 and 4096
+// at n = 2048, 8192 and 32768, worth 2-8% over the previous 128.
+const hgcdThreshold = 256
 
 /*
 FastPartialGCD finds the first remainder in the Euclidean sequence of (a, b)
