@@ -1,0 +1,39 @@
+version: "2"
+
+linters:
+  # errcheck, govet, ineffassign, staticcheck, unused.
+  # `unused` is the one that catches dead declarations — go vet only flags unused
+  # locals and imports, so it will not tell you a helper or an exported-but-unreachable
+  # method is never called.
+  default: standard
+  enable:
+    - misspell # docs are the product for a library; typos in godoc ship to pkg.go.dev
+    - revive # missing doc comments on exported identifiers, naming, early returns
+    - unconvert # redundant conversions
+    - copyloopvar # loop-variable copies left over from pre-1.22 Go
+    - errorlint # errors.Is/As correctness, %w usage
+    - nilerr # returning nil after a non-nil error
+    - predeclared # shadowing builtins (min, max, len, ...)
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - disableStutteringCheck # field.Field / gao.Code read fine in context
+        - name: early-return
+        - name: unreachable-code
+        - name: redefines-builtin-id
+
+  exclusions:
+    rules:
+      # Tests construct plenty of throwaway values and deliberately ignore errors in
+      # table setup; holding them to the exported-doc-comment rule is noise.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - revive
+
+formatters:
+  enable:
+    - gofmt

@@ -1,9 +1,26 @@
 # Gao Decoder for Reed-Solomon Codes in Go
 
 ## Overview
-This repository implements Gao's decoder for Reed-Solomon error-correcting codes in Go. 
-The decoder can perform robust interpolation (fix corruptions), given a list of the original evaluation points.
 
+This repository implements Gao's decoder for Reed-Solomon codes in Go, over
+**arbitrary prime fields** up to 63 bits. Can be extended to large prime fields using CRT/RNS.
+
+Two things distinguish it from the erasure-coding libraries most Go projects reach
+for:
+
+- **It corrects errors, not just erasures.** An erasure is a symbol you know is
+  missing; an error is a symbol that is silently wrong, at a position you do not
+  know. Libraries such as `klauspost/reedsolomon` repair only the former — their
+  README is explicit that "the encoder does not know which parts are invalid". This
+  decoder repairs both, and a mixture of the two, as long as
+  `2*errors + erasures <= n-k`.
+- **It works over prime fields**, not `GF(2^8)`.
+
+The polynomial and finite-field arithmetic underneath are exported as a reusable
+[`field`](./field) package: prime fields, dense polynomial rings, NTT, Lagrange
+interpolation, and a half-GCD extended Euclidean algorithm.
+
+> **Status: v0.x.** The API may still change. Pin a version.
 
 ## Installation
 
@@ -32,8 +49,7 @@ func main() {
 	f, _ := field.NewPrimeField(65537)
 
 	const n, k = 16, 4
-	params, _ := gao.NewCodeParameters(gao.NewNttEvaluator(f), n, k)
-	code := gao.NewCodeGao(params)
+	code, _ := gao.NewCode(f, n, k)
 
 	data := []uint64{10, 20, 30, 40}
 	codeword, _ := code.EncodeToSlice(data)
@@ -48,20 +64,76 @@ func main() {
 }
 ```
 
-Two evaluation-point strategies are available. `NewNttEvaluator` uses roots of
-unity and NTT-based polynomial arithmetic (fast; needs a field with suitable
-roots of unity). `NewSlowEvaluator` uses successive powers of a generator and
-classical arithmetic, and works for any prime field.
+### Declaring erasures
 
-`Encode`/`Decode` operate on `map[uint64]uint64` of evaluation point to value,
-which lets you express *erasures* by simply omitting entries.
-`EncodeToSlice`/`DecodeFromSlice` are the positional equivalents.
+Erasures cost half what errors do, so declare the ones you know about.
+With the map form, an erasure is simply an absent key:
 
-See the unit tests for further examples.
+```go
+codeword, _ := code.Encode(data)          // map: point -> value
+xs := code.EvaluationPoints()             // the map's keys, in order
 
-## Planned Improvements:
+delete(codeword, xs[0])                   // an erasure: costs 1 of the n-k budget
+codeword[xs[1]] = 999                     // an error:   costs 2
 
-- Remove the Lattigo import by implementing a prime factorization algorithm.
+decoded, err := code.Decode(codeword)
+```
+
+With the positional form, pass the indices instead. Whatever the slice holds at an
+erased index is ignored, so there is no need to blank those entries first:
+
+```go
+codeword, _ := code.EncodeToSlice(data)
+
+codeword[0] = 0                           // value irrelevant; index 0 is declared
+codeword[1] = 999                         // an error: not declared
+
+decoded, err := code.DecodeFromSlice(codeword, 0)
+```
+
+Past the budget `Decode` usually returns `ErrDecoding`, but it cannot always tell:
+with enough errors a received word can land closer to a *different* valid codeword,
+and you get a confidently wrong message. That is inherent to the code, not to this
+implementation.
+
+### Choosing parameters
+
+`NewCode` picks the evaluation strategy for you:
+
+| Strategy | Cost | Constraint on `n` |
+|---|---|---|
+| NTT (roots of unity) | quasi-linear | power of two dividing `p-1` |
+| Pointwise (`1..n`) | quadratic in `n` | any `0 < n < p` |
+
+The NTT is used whenever the field and `n` permit, and otherwise it falls back to
+pointwise evaluation. **That fallback is silent**, and at large `n` the difference is
+substantial, so if the fast path is a requirement rather than a preference, say so:
+
+```go
+code, err := gao.NewCode(f, n, k, gao.RequireNTT()) // error instead of falling back
+code, err := gao.NewCode(f, n, k, gao.Pointwise())  // force the classical path
+code.UsesNTT()                                      // or just check afterwards
+```
+
+To get the NTT, pick a prime with a large power of two dividing `p-1`. `65537` works
+for any `n` up to `2^16`. By contrast `929` (the PDF417 field) has
+`p-1 = 928 = 2^5 * 29`, so its NTT reaches only `n = 32`; beyond that it falls back.
+
+Invalid parameters are reported at construction — `NewCode` returns
+`ErrUnsupportedSize`, `ErrNSmallerThanK` or `ErrNonPositiveK` rather than failing
+later.
+
+### Notes
+
+- A `*Code` is immutable after construction and safe for concurrent use.
+- `Decode` and `DecodeFromSlice` never modify their input.
+
+See [`example_test.go`](./example_test.go) and the unit tests for further examples.
+
+## Planned Improvements
+
+- Remove the Lattigo dependency by implementing primitive-root search directly.
+  It is currently pulled in for a single call.
 
 ## Explanation about the decoding logic
 GAO used a strong assumption:
