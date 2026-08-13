@@ -20,11 +20,11 @@ func Example() {
 
 	const n, k = 16, 4
 
-	params, err := gao.NewCodeParameters(gao.NewNttEvaluator(f), n, k)
+	// RequireNTT: fail rather than silently fall back to the quadratic path.
+	code, err := gao.NewCode(f, n, k, gao.RequireNTT())
 	if err != nil {
 		panic(err)
 	}
-	code := gao.NewCodeGao(params)
 
 	data := []uint64{10, 20, 30, 40}
 
@@ -44,7 +44,7 @@ func Example() {
 	}
 
 	fmt.Println(decoded)
-	fmt.Println("max repairable errors:", params.MaxErrors())
+	fmt.Println("max repairable errors:", code.MaxErrors())
 	// Output:
 	// [10 20 30 40]
 	// max repairable errors: 6

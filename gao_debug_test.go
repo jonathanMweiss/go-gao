@@ -18,11 +18,8 @@ func TestReproductionBenchmarkFailure(t *testing.T) {
 
 	k := 8192
 	n := 2 * k
-	eval := NewNttEvaluator(f)
-	prms, err := NewCodeParameters(eval, n, k)
+	gao, err := NewCode(f, n, k, RequireNTT())
 	a.NoError(err)
-
-	gao := NewCodeGao(prms)
 
 	// Create test data
 	slc := make([]uint64, k)

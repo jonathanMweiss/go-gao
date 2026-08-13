@@ -11,90 +11,184 @@ import (
 	"github.com/jonathanmweiss/go-gao/field"
 )
 
-type CodeParams struct {
-	EvaluationMap
+// Code is a Reed-Solomon code that decodes with Gao's algorithm.
+//
+// A *Code is immutable after construction and safe for concurrent use.
+type Code struct {
+	// eval is a named field, not embedded: embedding would promote the evaluator's
+	// methods onto Code and make decoding internals part of the public API.
+	eval evaluationMap
+
 	n         int
 	k         int
 	maxErrors int
-}
 
-type Code struct {
-	CodeParams
 	pr           field.PolyRing
 	interpolator *field.Interpolator
 	// g0 polynomial from the Gao code.
 	// with fast EvaluationMaps like NTT, this polynomial can be used to do fast division.
 	g0 *field.Polynomial
 
+	// xs are the n evaluation points. n is fixed for the life of a Code, so these are
+	// computed once here rather than re-derived — an NTT per call, for nttEvaluator.
+	// Read-only after construction, which is what makes a *Code safe to share.
+	xs []uint64
+
 	stopDegree int
 }
 
 // N returns the codeword length: the number of evaluation points the encoder emits.
-func (c *CodeParams) N() int {
-	return c.n
+func (gao *Code) N() int {
+	return gao.n
 }
 
 // K returns the message length: the number of data symbols carried by a codeword.
-func (c *CodeParams) K() int {
-	return c.k
+func (gao *Code) K() int {
+	return gao.k
 }
 
 // MaxErrors returns the number of corrupted symbols the code can repair when their
 // positions are unknown, (n-k)/2. Erasures are cheaper: each one costs half an error,
 // so a decode succeeds while 2*errors+erasures <= n-k.
-func (c *CodeParams) MaxErrors() int {
-	return c.maxErrors
+func (gao *Code) MaxErrors() int {
+	return gao.maxErrors
+}
+
+// UsesNTT reports whether this code evaluates via the number theoretic transform
+// (quasi-linear) rather than pointwise (quadratic in n).
+//
+// Worth checking after NewCode without RequireNTT, since the fallback is silent.
+func (gao *Code) UsesNTT() bool {
+	return gao.eval.isNTT()
+}
+
+// EvaluationPoints returns the n points a codeword is evaluated at, in the order
+// EncodeToSlice and DecodeFromSlice use. These are the keys of the map Encode returns,
+// so they are what a caller needs to assemble the map for Decode.
+//
+// The returned slice is a copy and may be modified freely.
+func (gao *Code) EvaluationPoints() []uint64 {
+	return slices.Clone(gao.xs)
+}
+
+// PrimeField returns the field this code operates over.
+func (gao *Code) PrimeField() field.Field {
+	return gao.pr.GetField()
 }
 
 var (
 	ErrNSmallerThanK   = errors.New("redundancy value `n` must be greater than or equal to data size `k`")
 	ErrNonPositiveK    = errors.New("data size `k` must be positive")
-	ErrUnsupportedSize = errors.New("evaluation map does not support the requested codeword length `n`")
+	ErrUnsupportedSize = errors.New("evaluation strategy does not support the requested codeword length `n`")
 )
 
-// NewCodeParameters validates n and k against the evaluation map and returns the
-// parameters for a code that carries k data symbols in an n-symbol codeword.
+// An Option adjusts how NewCode selects its evaluation strategy.
+type Option func(*config)
+
+type config struct {
+	requireNTT bool
+	forceSlow  bool
+}
+
+// RequireNTT makes NewCode fail rather than fall back to pointwise evaluation when the
+// field and n cannot support an NTT.
 //
-// It returns ErrNonPositiveK if k <= 0, ErrNSmallerThanK if n < k, and
-// ErrUnsupportedSize if e cannot produce n evaluation points — which for
-// NttEvaluator means n must be a power of two dividing p-1.
-func NewCodeParameters(e EvaluationMap, n, k int) (CodeParams, error) {
+// Use it whenever the quasi-linear path is a requirement rather than a preference: the
+// default fallback is silent, and pointwise evaluation is quadratic in n, which at large
+// n is the difference between milliseconds and minutes.
+func RequireNTT() Option {
+	return func(c *config) { c.requireNTT = true }
+}
+
+// Pointwise forces classical pointwise evaluation even where an NTT is available.
+// Intended for benchmarking and differential testing against the fast path.
+func Pointwise() Option {
+	return func(c *config) { c.forceSlow = true }
+}
+
+// NewCode builds a Reed-Solomon code carrying k data symbols in an n-symbol codeword
+// over the prime field f, decoding with Gao's algorithm.
+//
+// By default it evaluates via the number theoretic transform when f and n allow — which
+// requires n to be a power of two dividing p-1 — and otherwise falls back to pointwise
+// evaluation, which accepts any 0 < n < p but is quadratic in n. Pass RequireNTT to turn
+// that fallback into an error, or Pointwise to force the classical path. Check UsesNTT
+// to see which was chosen.
+//
+// It returns ErrNonPositiveK if k <= 0, ErrNSmallerThanK if n < k, and ErrUnsupportedSize
+// if no permitted strategy can evaluate at n points.
+func NewCode(f field.Field, n, k int, opts ...Option) (*Code, error) {
+	var cfg config
+
+	for _, opt := range opts {
+		// A nil Option is a no-op, so callers can pass one conditionally.
+		if opt == nil {
+			continue
+		}
+
+		opt(&cfg)
+	}
+
 	if k <= 0 {
-		return CodeParams{}, ErrNonPositiveK
+		return nil, ErrNonPositiveK
 	}
 
 	if n < k {
-		return CodeParams{}, ErrNSmallerThanK
+		return nil, ErrNSmallerThanK
 	}
 
-	if err := e.supportsSize(n); err != nil { // ensuring support for size n
-		return CodeParams{}, fmt.Errorf("%w: n=%d: %w", ErrUnsupportedSize, n, err)
+	eval, err := selectEvaluator(f, n, cfg)
+	if err != nil {
+		return nil, err
 	}
 
-	return CodeParams{
-		EvaluationMap: e,
-		n:             n,
-		k:             k,
-		maxErrors:     (n - k) / 2,
+	pr := field.NewDensePolyRing(f)
+
+	return &Code{
+		eval:      eval,
+		n:         n,
+		k:         k,
+		maxErrors: (n - k) / 2,
+		pr:        pr,
+		// g0(x) = (x - x_1)(x - x_2)...(x - x_n)
+		g0:           eval.GenerateLocatorPolynomial(n),
+		xs:           eval.EvaluationPoints(n),
+		interpolator: field.NewInterpolator(pr),
+		stopDegree:   (n + k) / 2,
 	}, nil
 }
 
-// NewCodeGao builds a Reed-Solomon code that decodes with Gao's algorithm from
-// parameters already validated by NewCodeParameters.
-//
-// The returned *Code is safe for concurrent use by multiple goroutines.
-func NewCodeGao(c CodeParams) *Code {
-	fld := c.EvaluationMap.PrimeField()
-	pr := field.NewDensePolyRing(fld)
-	// create g0(x) = (x - x_1)(x - x_2)...(x - x_n)
+// selectEvaluator resolves the strategy, preferring the NTT unless told otherwise.
+func selectEvaluator(f field.Field, n int, cfg config) (evaluationMap, error) {
+	slow := newSlowEvaluator(f)
 
-	return &Code{
-		CodeParams:   c,
-		pr:           pr,
-		g0:           c.EvaluationMap.GenerateLocatorPolynomial(c.N()),
-		interpolator: field.NewInterpolator(pr),
-		stopDegree:   (c.N() + c.K()) / 2,
+	if cfg.forceSlow {
+		if err := slow.supportsSize(n); err != nil {
+			return nil, fmt.Errorf("%w: n=%d: %w", ErrUnsupportedSize, n, err)
+		}
+
+		return slow, nil
 	}
+
+	ntt := newNttEvaluator(f)
+
+	nttErr := ntt.supportsSize(n)
+	if nttErr == nil {
+		return ntt, nil
+	}
+
+	if cfg.requireNTT {
+		return nil, fmt.Errorf(
+			"%w: n=%d: RequireNTT was set but this field admits no NTT of that length "+
+				"(n must be a power of two dividing p-1, p=%d): %w",
+			ErrUnsupportedSize, n, f.Modulus(), nttErr)
+	}
+
+	if err := slow.supportsSize(n); err != nil {
+		return nil, fmt.Errorf("%w: n=%d: %w", ErrUnsupportedSize, n, err)
+	}
+
+	return slow, nil
 }
 
 var ErrDataTooLarge = errors.New("data too large")
@@ -107,7 +201,7 @@ func (gao *Code) Encode(data []uint64) (map[uint64]uint64, error) {
 	}
 
 	// create map of points.
-	xs := gao.EvaluationMap.evaluationPoints(gao.N())
+	xs := gao.xs
 	points := make(map[uint64]uint64, gao.N())
 
 	for i, y := range ys {
@@ -157,7 +251,7 @@ func (gao *Code) sliceDecode(xs []uint64, ys []uint64, erased []int) ([]uint64, 
 
 	var err error
 	var f, r *field.Polynomial
-	if gao.EvaluationMap.isNTT() {
+	if gao.eval.isNTT() {
 		f, r, err = gao.decodeNTT(ys, xs, erased)
 	} else {
 		f, r, err = gao.decodeGeneric(ys, xs, erased)
@@ -191,10 +285,10 @@ func (gao *Code) prepareDecoding(toDecode map[uint64]uint64) ([]uint64, []uint64
 
 	erasedIndices := make([]int, 0)
 
-	xs := gao.EvaluationMap.evaluationPoints(gao.N())
+	xs := gao.xs
 	ys := make([]uint64, gao.N())
 
-	// ys follows the order of the EvaluationMap's evaluation points. A point absent from
+	// ys follows the order of the evaluationMap's evaluation points. A point absent from
 	// toDecode is an erasure: it stays zero here, which the decoder is free to do because
 	// the erasure locator annihilates whatever value sits at an erased position.
 	for i, x := range xs {
@@ -388,7 +482,7 @@ func (gao *Code) EncodeToSlice(data []uint64) ([]uint64, error) {
 	p := gao.pr.NewPolynomial(paddedData, false)
 	// evaluate polynomial at n points.
 
-	ys, err := gao.EvaluationMap.EvaluatePolynomial(p)
+	ys, err := gao.eval.EvaluatePolynomial(p)
 	if err != nil {
 		return nil, err
 	}
@@ -409,5 +503,5 @@ func (gao *Code) DecodeFromSlice(ys []uint64) ([]uint64, error) {
 	// sliceDecode reduces and transforms ys in place, so hand it a copy.
 	work := slices.Clone(ys)
 
-	return gao.sliceDecode(gao.EvaluationMap.evaluationPoints(gao.N()), work, nil)
+	return gao.sliceDecode(gao.xs, work, nil)
 }

@@ -5,19 +5,17 @@ package gao
 
 import (
 	"errors"
-	"slices"
-	"sync"
 
 	"github.com/jonathanmweiss/go-gao/field"
 )
 
-// EvaluationMap supplies the n points a codeword is evaluated at, and the machinery to
+// evaluationMap supplies the n points a codeword is evaluated at, and the machinery to
 // evaluate a polynomial over them. Implementations can be fast transforms such as an
 // NTT, or plain pointwise polynomial evaluation.
 //
 // The interface is deliberately sealed: it carries unexported methods, so it cannot be
-// implemented outside this package. Use NewNttEvaluator or NewSlowEvaluator.
-type EvaluationMap interface {
+// implemented outside this package. Use newNttEvaluator or newSlowEvaluator.
+type evaluationMap interface {
 	// has access to a specific prime field.
 	PrimeField() field.Field
 	// returns the evaluation points for a polynomial of degree n.
@@ -36,99 +34,47 @@ type EvaluationMap interface {
 	// field, so callers can fail with an error instead of panicking later.
 	supportsSize(n int) error
 
-	// evaluationPoints returns the cached points without copying. Callers must not
-	// modify the result. Code uses this on the encode/decode path, where it only
-	// reads, to avoid copying n elements per operation.
-	evaluationPoints(n int) []uint64
-
 	isNTT() bool
 }
 
 var errNonPositiveN = errors.New("codeword length `n` must be positive")
 
-type evaluationCache struct {
-	sync.Locker
-	degreeToPoints map[int][]uint64
-}
-
-func (e *evaluationCache) storePoints(n int, points []uint64) {
-	e.Lock()
-	defer e.Unlock()
-
-	if _, ok := e.degreeToPoints[n]; ok {
-		return
-	}
-
-	e.degreeToPoints[n] = points
-}
-
-// SlowEvaluator evaluates polynomials pointwise at the points 1, 2, ..., n using
-// classical arithmetic. Unlike NttEvaluator it places no constraint on n beyond
+// slowEvaluator evaluates polynomials pointwise at the points 1, 2, ..., n using
+// classical arithmetic. Unlike nttEvaluator it places no constraint on n beyond
 // 0 < n < p, so it is the option for a codeword length that is not a power of two
 // dividing p-1.
 //
 // It is markedly slower: encode and decode are quadratic in n rather than
-// quasi-linear, so it is intended for small codes. Prefer NttEvaluator when the
+// quasi-linear, so it is intended for small codes. Prefer nttEvaluator when the
 // field and n permit.
-type SlowEvaluator struct {
-	cache *evaluationCache
-
+//
+// A slowEvaluator holds no mutable state and is safe for concurrent use.
+type slowEvaluator struct {
 	pr field.PolyRing
 }
 
-func (e *evaluationCache) loadPoints(n int) []uint64 {
-	e.Lock()
-	defer e.Unlock()
-
-	if points, ok := e.degreeToPoints[n]; ok {
-		return points
-	}
-
-	return nil
-}
-
-func NewSlowEvaluator(f field.Field) *SlowEvaluator {
-	return &SlowEvaluator{
-		pr:    field.NewDensePolyRing(f),
-		cache: newEvaluatorCache(),
-	}
-}
-
-func newEvaluatorCache() *evaluationCache {
-	return &evaluationCache{
-		Locker:         &sync.Mutex{},
-		degreeToPoints: make(map[int][]uint64),
-	}
+func newSlowEvaluator(f field.Field) *slowEvaluator {
+	return &slowEvaluator{pr: field.NewDensePolyRing(f)}
 }
 
 // EvaluationPoints returns the points 1, 2, ..., n used to evaluate a codeword.
-// The returned slice is a copy: mutating it does not disturb the internal cache.
-func (e *SlowEvaluator) EvaluationPoints(n int) []uint64 {
-	return slices.Clone(e.evaluationPoints(n))
-}
-
-func (e *SlowEvaluator) evaluationPoints(n int) []uint64 {
-	if points := e.cache.loadPoints(n); points != nil {
-		return points
-	}
-
+// Each call builds a fresh slice.
+func (e *slowEvaluator) EvaluationPoints(n int) []uint64 {
 	points := make([]uint64, n)
 	for i := range points {
 		points[i] = uint64(i + 1)
 	}
-
-	e.cache.storePoints(n, points)
 
 	return points
 }
 
 var errNotInCoefficientForm = errors.New("polynomial not in coefficient form")
 
-func (e *SlowEvaluator) PrimeField() field.Field {
+func (e *slowEvaluator) PrimeField() field.Field {
 	return e.pr.GetField()
 }
 
-func (e *SlowEvaluator) EvaluatePolynomial(p *field.Polynomial) ([]uint64, error) {
+func (e *slowEvaluator) EvaluatePolynomial(p *field.Polynomial) ([]uint64, error) {
 	if !p.IsCoeffMode() {
 		return nil, errNotInCoefficientForm
 	}
@@ -144,7 +90,7 @@ func (e *SlowEvaluator) EvaluatePolynomial(p *field.Polynomial) ([]uint64, error
 	return values, nil
 }
 
-func (e *SlowEvaluator) GenerateLocatorPolynomial(n int) *field.Polynomial {
+func (e *slowEvaluator) GenerateLocatorPolynomial(n int) *field.Polynomial {
 	xs := e.EvaluationPoints(n)
 	polys := make([]*field.Polynomial, n)
 
@@ -163,7 +109,7 @@ func (e *SlowEvaluator) GenerateLocatorPolynomial(n int) *field.Polynomial {
 
 // supportsSize accepts any positive n: the points are simply 1..n, which requires
 // nothing of the field beyond having at least n distinct non-zero elements.
-func (e *SlowEvaluator) supportsSize(n int) error {
+func (e *slowEvaluator) supportsSize(n int) error {
 	if n <= 0 {
 		return errNonPositiveN
 	}
@@ -178,6 +124,6 @@ func (e *SlowEvaluator) supportsSize(n int) error {
 var errNTooLargeForField = errors.New("n must be smaller than the field modulus")
 
 // does not support fast Gao.
-func (e *SlowEvaluator) isNTT() bool {
+func (e *slowEvaluator) isNTT() bool {
 	return false
 }

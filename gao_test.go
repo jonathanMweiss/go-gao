@@ -14,7 +14,8 @@ import (
 )
 
 type testCase struct {
-	EvaluationMap
+	name string
+	opt  Option
 	n, k int
 }
 
@@ -41,16 +42,14 @@ func TestNoCorruptions(t *testing.T) {
 	a.NoError(err)
 
 	testCases := []testCase{
-		{NewSlowEvaluator(f), 18, 5},
-		{NewNttEvaluator(f), 16, 4}, // checking non powers of 2.
+		{"pointwise", Pointwise(), 18, 5},
+		{"ntt", nil, 16, 4},
 	}
 
 	for _, tc := range testCases {
 
-		prms, err := NewCodeParameters(tc.EvaluationMap, tc.n, tc.k)
+		gao, err := NewCode(f, tc.n, tc.k, tc.opt)
 		a.NoError(err)
-
-		gao := NewCodeGao(prms)
 
 		encoded, err := gao.Encode(makeTestSlice(tc.k))
 		a.NoError(err)
@@ -70,27 +69,25 @@ func TestErasures(t *testing.T) {
 	a.NoError(err)
 
 	testCases := []testCase{
-		{NewSlowEvaluator(f), 18, 5},
-		{NewNttEvaluator(f), 16, 4}, // checking non powers of 2.
+		{"pointwise", Pointwise(), 18, 5},
+		{"ntt", nil, 16, 4},
 	}
 
 	for _, tc := range testCases {
-		prms, err := NewCodeParameters(tc.EvaluationMap, tc.n, tc.k)
+		gao, err := NewCode(f, tc.n, tc.k, tc.opt)
 		a.NoError(err)
-
-		gao := NewCodeGao(prms)
 
 		encoded, err := gao.Encode(makeTestSlice(tc.k))
 		a.NoError(err)
 
 		// add erasures. We should be able to handle up to n-k erasures.
-		numErasures := prms.N() - prms.K()
-		shuffledXs := shuffle(t, prms.EvaluationPoints(prms.n))
+		numErasures := gao.N() - gao.K()
+		shuffledXs := shuffle(t, gao.EvaluationPoints())
 		for i := 0; i < numErasures; i++ {
 			delete(encoded, shuffledXs[i])
 		}
 
-		a.Equal(prms.K(), len(encoded))
+		a.Equal(gao.K(), len(encoded))
 
 		decoded, err := gao.Decode(encoded)
 		a.NoError(err)
@@ -105,21 +102,19 @@ func TestMixedErasuresAndCorruptions(t *testing.T) {
 	a.NoError(err)
 
 	testCases := []testCase{
-		{NewSlowEvaluator(f), 18, 5}, // n-k=13. 2t+e <= 13. e=5, t=4 => 5+8=13.
-		{NewNttEvaluator(f), 16, 4},  // n-k=12. 2t+e <= 12. e=4, t=4 => 4+8=12.
+		{"pointwise", Pointwise(), 18, 5}, // n-k=13. 2t+e <= 13. e=5, t=4 => 5+8=13.
+		{"ntt", nil, 16, 4},               // n-k=12. 2t+e <= 12. e=4, t=4 => 4+8=12.
 	}
 
 	for _, tc := range testCases {
-		prms, err := NewCodeParameters(tc.EvaluationMap, tc.n, tc.k)
+		gao, err := NewCode(f, tc.n, tc.k, tc.opt)
 		a.NoError(err)
-
-		gao := NewCodeGao(prms)
 		originalData := makeTestSlice(tc.k)
 
 		encoded, err := gao.Encode(originalData)
 		a.NoError(err)
 
-		xs := tc.EvaluationPoints(tc.n)
+		xs := gao.EvaluationPoints()
 		shuffledXs := shuffle(t, xs)
 
 		numErasures := 4
@@ -166,15 +161,13 @@ func TestCorruptions(t *testing.T) {
 	a.NoError(err)
 
 	testCases := []testCase{
-		{NewSlowEvaluator(f), 18, 5},
-		{NewNttEvaluator(f), 16, 4}, // checking non powers of 2.
+		{"pointwise", Pointwise(), 18, 5},
+		{"ntt", nil, 16, 4},
 	}
 
 	for _, tc := range testCases {
-		prms, err := NewCodeParameters(tc.EvaluationMap, tc.n, tc.k)
+		gao, err := NewCode(f, tc.n, tc.k, tc.opt)
 		a.NoError(err)
-
-		gao := NewCodeGao(prms)
 
 		encoded, err := gao.Encode(makeTestSlice(tc.k))
 		a.NoError(err)
@@ -185,12 +178,12 @@ func TestCorruptions(t *testing.T) {
 		}
 
 		// add corruptions
-		shuffledXs := shuffle(t, prms.EvaluationPoints(prms.n))
-		for i := 0; i < prms.MaxErrors(); i++ {
+		shuffledXs := shuffle(t, gao.EvaluationPoints())
+		for i := 0; i < gao.MaxErrors(); i++ {
 			corrupted[shuffledXs[i]] = rand.Uint64()
 		}
 
-		a.Len(corrupted, prms.N())
+		a.Len(corrupted, gao.N())
 		a.NotEqual(encoded, corrupted)
 
 		decoded, err := gao.Decode(corrupted)
@@ -208,15 +201,13 @@ func TestSliceEncodeDecode(t *testing.T) {
 	rng := rand.New(rand.NewSource(1337))
 
 	testCases := []testCase{
-		{NewSlowEvaluator(f), 18, 5},
-		{NewNttEvaluator(f), 16, 4},
+		{"pointwise", Pointwise(), 18, 5},
+		{"ntt", nil, 16, 4},
 	}
 
 	for _, tc := range testCases {
-		prms, err := NewCodeParameters(tc.EvaluationMap, tc.n, tc.k)
+		gao, err := NewCode(f, tc.n, tc.k, tc.opt)
 		a.NoError(err)
-
-		gao := NewCodeGao(prms)
 		originalData := makeTestSlice(tc.k)
 
 		// Test EncodeToSlice and DecodeFromSlice with no corruptions
@@ -234,7 +225,7 @@ func TestSliceEncodeDecode(t *testing.T) {
 		// Test with corruptions
 		corruptedSlice := make([]uint64, len(encodedSlice))
 		copy(corruptedSlice, encodedSlice)
-		corruptCodeword(f, rng, corruptedSlice, prms.MaxErrors())
+		corruptCodeword(f, rng, corruptedSlice, gao.MaxErrors())
 
 		decodedFromCorrupted, err := gao.DecodeFromSlice(corruptedSlice)
 		a.NoError(err)
@@ -258,21 +249,20 @@ func TestOptimisticErrorFreePath(t *testing.T) {
 	rng := rand.New(rand.NewSource(1337))
 
 	testCases := []testCase{
-		{NewSlowEvaluator(f), 18, 5}, // generic (interpolation) path
-		{NewNttEvaluator(f), 16, 4},  // NTT path
+		{"pointwise", Pointwise(), 18, 5}, // generic (interpolation) path
+		{"ntt", nil, 16, 4},               // NTT path
 	}
 
 	for _, tc := range testCases {
-		prms, err := NewCodeParameters(tc.EvaluationMap, tc.n, tc.k)
+		gao, err := NewCode(f, tc.n, tc.k, tc.opt)
 		a.NoError(err)
-		gao := NewCodeGao(prms)
 
 		msg := makeTestSlice(tc.k)
 		enc1, err := gao.EncodeToSlice(msg)
 		a.NoError(err)
 
 		// (a) correctness across 0..MaxErrors corruptions at random positions.
-		for e := 0; e <= prms.MaxErrors(); e++ {
+		for e := 0; e <= gao.MaxErrors(); e++ {
 			work := make([]uint64, len(enc1))
 			copy(work, enc1)
 
@@ -317,10 +307,10 @@ func BenchmarkDecode(b *testing.B) {
 
 	evaluators := []struct {
 		name string
-		eval EvaluationMap
+		opt  Option
 	}{
-		{"slow", NewSlowEvaluator(f)},
-		{"ntt", NewNttEvaluator(f)},
+		{"pointwise", Pointwise()},
+		{"ntt", RequireNTT()},
 	}
 
 	for _, k := range ks {
@@ -332,12 +322,10 @@ func BenchmarkDecode(b *testing.B) {
 			b.Run(name, func(b *testing.B) {
 				// --- Setup (not timed) ---
 
-				prms, err := NewCodeParameters(ev.eval, n, k)
+				gao, err := NewCode(f, n, k, ev.opt)
 				if err != nil {
 					b.Fatal(err)
 				}
-
-				gao := NewCodeGao(prms)
 
 				slc := makeTestSlice(k)
 
@@ -377,12 +365,10 @@ func BenchmarkDecodeFromSliceOnePercentCorruptionsNTT(b *testing.B) {
 
 	for _, k := range ks {
 		n := 2 * k
-		prms, err := NewCodeParameters(NewNttEvaluator(f), n, k)
+		gao, err := NewCode(f, n, k, RequireNTT())
 		if err != nil {
 			b.Fatal(err)
 		}
-
-		gao := NewCodeGao(prms)
 		slc := makeTestSlice(k)
 
 		encoded, err := gao.EncodeToSlice(slc)
