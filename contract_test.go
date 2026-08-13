@@ -157,6 +157,159 @@ func TestDecodeFromSliceRejectsWrongLength(t *testing.T) {
 	assert.ErrorIs(t, err, ErrMismatchedLengths)
 }
 
+// TestDecodeFromSliceErasures: naming erasures is the whole point of the parameter —
+// an erasure costs half an error, so a codeword that is hopeless when its damage is
+// treated as errors decodes cleanly once the positions are declared.
+func TestDecodeFromSliceErasures(t *testing.T) {
+	f, err := field.NewPrimeField(65537)
+	require.NoError(t, err)
+
+	const n, k = 16, 4 // n-k = 12, so 6 errors or 12 erasures
+
+	code, err := NewCode(f, n, k, RequireNTT())
+	require.NoError(t, err)
+
+	data := makeTestSlice(k)
+
+	clean, err := code.EncodeToSlice(data)
+	require.NoError(t, err)
+
+	t.Run("n-k erasures decode", func(t *testing.T) {
+		damaged := slices.Clone(clean)
+
+		erased := make([]int, 0, n-k)
+		for i := range n - k {
+			// Distinct garbage. Filling every slot with one value would place the
+			// received word a mere n-k-(n-k)=4 errors from the constant codeword
+			// p(x)=c, which is inside the budget of 6 and decodes legitimately.
+			damaged[i] = uint64(1000 + i*7919)
+			erased = append(erased, i)
+		}
+
+		// Declared as erasures: 12 <= n-k, so it decodes.
+		decoded, err := code.DecodeFromSlice(damaged, erased...)
+		require.NoError(t, err)
+		assert.Equal(t, data, decoded)
+
+		// Undeclared, the same slice is 12 errors against a budget of 6 — past the
+		// distance bound, so the decoder either reports failure or lands on a
+		// different codeword. What it must not do is return the original message.
+		got, err := code.DecodeFromSlice(damaged)
+		if err == nil {
+			assert.NotEqual(t, data, got,
+				"12 undeclared errors are beyond the correction radius")
+		}
+	})
+
+	t.Run("value at an erased index is ignored", func(t *testing.T) {
+		zeroed, garbage := slices.Clone(clean), slices.Clone(clean)
+
+		erased := []int{1, 4, 9}
+		for _, i := range erased {
+			zeroed[i] = 0
+			garbage[i] = 65536
+		}
+
+		fromZero, err := code.DecodeFromSlice(zeroed, erased...)
+		require.NoError(t, err)
+
+		fromGarbage, err := code.DecodeFromSlice(garbage, erased...)
+		require.NoError(t, err)
+
+		assert.Equal(t, data, fromZero)
+		assert.Equal(t, fromZero, fromGarbage, "the filler value must not affect the result")
+	})
+
+	t.Run("errors and erasures together", func(t *testing.T) {
+		// 4 erasures + 4 errors: 2*4 + 4 = 12 <= n-k.
+		damaged := slices.Clone(clean)
+
+		erased := []int{0, 1, 2, 3}
+		for _, i := range erased {
+			damaged[i] = 111
+		}
+
+		for _, i := range []int{7, 9, 11, 13} {
+			damaged[i] = 222 // undeclared: genuine errors
+		}
+
+		decoded, err := code.DecodeFromSlice(damaged, erased...)
+		require.NoError(t, err)
+		assert.Equal(t, data, decoded)
+	})
+
+	t.Run("agrees with the map form", func(t *testing.T) {
+		xs := code.EvaluationPoints()
+		erased := []int{2, 5}
+
+		damaged := slices.Clone(clean)
+
+		asMap, err := code.Encode(data)
+		require.NoError(t, err)
+
+		for _, i := range erased {
+			damaged[i] = 7777
+			delete(asMap, xs[i])
+		}
+
+		fromSlice, err := code.DecodeFromSlice(damaged, erased...)
+		require.NoError(t, err)
+
+		fromMap, err := code.Decode(asMap)
+		require.NoError(t, err)
+
+		assert.Equal(t, fromMap, fromSlice)
+	})
+}
+
+// TestDecodeFromSliceRejectsBadErasures: these indices come straight from the caller,
+// unlike the map form where absent keys are well-formed by construction. A duplicate
+// would give the erasure locator a repeated root and corrupt the decode silently.
+func TestDecodeFromSliceRejectsBadErasures(t *testing.T) {
+	f, err := field.NewPrimeField(65537)
+	require.NoError(t, err)
+
+	const n, k = 16, 4
+
+	code, err := NewCode(f, n, k, RequireNTT())
+	require.NoError(t, err)
+
+	ys := make([]uint64, n)
+
+	for _, tc := range []struct {
+		name   string
+		erased []int
+		want   error
+	}{
+		{"negative index", []int{-1}, ErrErasureOutOfRange},
+		{"index == n", []int{n}, ErrErasureOutOfRange},
+		{"index beyond n", []int{999}, ErrErasureOutOfRange},
+		{"duplicate", []int{3, 3}, ErrDuplicateErasure},
+		{"duplicate among valid", []int{1, 5, 1}, ErrDuplicateErasure},
+		// Distinct indices, so this exercises the budget rather than the duplicate
+		// check. n-k+1 erasures leave fewer than k good points.
+		{"more than n-k", distinctIndices(n - k + 1), ErrTooManyMissingPoints},
+		// Repeats must be reported as repeats even when there are enough of them to
+		// also breach the budget, since the count is meaningless until they are gone.
+		{"too many, but all duplicates", make([]int, n-k+1), ErrDuplicateErasure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := code.DecodeFromSlice(ys, tc.erased...)
+			assert.ErrorIs(t, err, tc.want)
+		})
+	}
+}
+
+// distinctIndices returns 0, 1, ..., count-1.
+func distinctIndices(count int) []int {
+	out := make([]int, count)
+	for i := range out {
+		out[i] = i
+	}
+
+	return out
+}
+
 // TestEvaluationPointsReturnsCopy: a Code holds its own points for its whole life, so a
 // caller mutating what EvaluationPoints hands back must not be able to reach them.
 func TestEvaluationPointsReturnsCopy(t *testing.T) {

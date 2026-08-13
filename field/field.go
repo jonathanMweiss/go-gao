@@ -11,6 +11,7 @@ import (
 	"github.com/tuneinsight/lattigo/v6/ring"
 )
 
+// Field is the arithmetic of a finite field, with elements represented as uint64.
 type Field interface {
 	Equals(a, b uint64) bool
 	Add(a, b uint64) uint64
@@ -28,6 +29,7 @@ type Field interface {
 	Factors() []uint64
 }
 
+// PrimeField implements Field over the integers modulo a prime p < 2^63.
 type PrimeField struct {
 	prime     uint64
 	generator uint64
@@ -41,9 +43,9 @@ var (
 
 const maxBitUsage = 63
 
-/*
-Assumes you are using a prime. Will not check for validity.
-*/
+// NewPrimeField returns the field of integers modulo prime.
+//
+// prime must be prime and below 2^63.
 func NewPrimeField(prime uint64) (Field, error) {
 	if prime > (1 << maxBitUsage) {
 		return nil, errPrimeTooLarge
@@ -82,6 +84,8 @@ func (f *PrimeField) Modulus() uint64 {
 	return f.prime
 }
 
+// GetRootOfUnity returns a primitive n-th root of unity, which exists only when n is
+// a power of two dividing p-1.
 func (f *PrimeField) GetRootOfUnity(n uint64) (uint64, error) {
 	if n == 0 || n == 1 {
 		return 0, errNSTooSmall
@@ -102,32 +106,23 @@ func (f *PrimeField) GetRootOfUnity(n uint64) (uint64, error) {
 
 }
 
-func (f *PrimeField) ElemSlice(vals []uint64) []uint64 {
-	mod := f.prime
-	for i, v := range vals {
-		vals[i] = v % mod
-	}
-
-	return vals
-}
-
+// IsPowerOfTwo reports whether n is a power of two.
 func IsPowerOfTwo(n uint64) bool {
 	// https://graphics.stanford.edu/~seander/bithacks.html#DetermineIfPowerOf2
 	return n != 0 && (n&(n-1)) == 0
 }
 
-func (f *PrimeField) Prime() uint64 {
-	return f.prime
-}
-
+// Generator returns a primitive root of the field: F_p^* = {1, g, g^2, ..., g^(p-2)}.
 func (f *PrimeField) Generator() uint64 {
 	return f.generator
 }
 
+// Factors returns the prime factorization of p-1.
 func (f *PrimeField) Factors() []uint64 {
 	return f.factors
 }
 
+// Reduce returns val modulo the field prime.
 func (f *PrimeField) Reduce(val uint64) uint64 {
 	if val < f.prime {
 		return val
@@ -136,6 +131,7 @@ func (f *PrimeField) Reduce(val uint64) uint64 {
 	return val % f.prime
 }
 
+// Add returns a + b modulo the field prime.
 func (f *PrimeField) Add(a, b uint64) uint64 {
 	tmp := a + b
 	if tmp >= f.prime {
@@ -161,6 +157,7 @@ func fieldMul(a, b uint64, mod uint64) uint64 {
 	return rem
 }
 
+// Pow returns base^exp modulo the field prime, by exponentiation by squaring.
 // https://en.wikipedia.org/wiki/Exponentiation_by_squaring
 func (f *PrimeField) Pow(base, exp uint64) uint64 {
 	mod := f.prime
@@ -194,6 +191,7 @@ func (f *PrimeField) Inverse(e uint64) uint64 {
 	return f.Pow(e, f.prime-2)
 }
 
+// Neg returns the additive inverse of e modulo the field prime.
 func (f *PrimeField) Neg(e uint64) uint64 {
 	res := f.prime - e
 	if e == 0 {
@@ -202,6 +200,7 @@ func (f *PrimeField) Neg(e uint64) uint64 {
 	return res
 }
 
+// Sub returns a - b modulo the field prime.
 func (f *PrimeField) Sub(a, b uint64) uint64 {
 	if a < b {
 		return f.prime - (b - a)
@@ -210,6 +209,7 @@ func (f *PrimeField) Sub(a, b uint64) uint64 {
 	return a - b
 }
 
+// Equals reports whether a and b are the same field element.
 func (f *PrimeField) Equals(a, b uint64) bool {
 	mod := f.prime
 	return (a % mod) == (b % mod)

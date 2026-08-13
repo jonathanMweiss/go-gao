@@ -8,6 +8,7 @@ import (
 	"sync"
 )
 
+// A PolyRing performs polynomial arithmetic over a fixed coefficient field.
 type PolyRing interface {
 	GetField() Field
 
@@ -83,6 +84,7 @@ func NewDensePolyRing(f Field) PolyRing {
 	}
 }
 
+// GetField returns the coefficient field this ring operates over.
 func (r *DensePolyRing) GetField() Field { return r.Field }
 
 // NewPolynomial builds a polynomial over this ring's field from coefficients ordered
@@ -504,6 +506,8 @@ func stepMatrix(r *DensePolyRing, q *Polynomial) polyMatrix2x2 {
 	}
 }
 
+// PartialExtendedEuclidean runs the extended Euclidean algorithm, stopping early.
+//
 // returns r= gcd(a,b), x, y such that ax + by = r.
 // where r.Degree() < stopDegree. For full GCD, use stopDegree=0.
 func (r *DensePolyRing) PartialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial) {
@@ -916,6 +920,8 @@ func (r *DensePolyRing) mulSubInto(dst, a, q, b *Polynomial) {
 	r.trimTrailingZeros(dst)
 }
 
+// NttPartialExtendedEuclidean is PartialExtendedEuclidean using NTT-based division steps.
+//
 // for full explanation on the iterative algorithm go to PartialExtendedEuclidean.
 // This is the same algorithm but uses schoolbook/DivNTT steps.
 func (r *DensePolyRing) NttPartialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial) {
@@ -1001,8 +1007,13 @@ func (r *DensePolyRing) FastPartialGCD(a, b *Polynomial, stopDegree int) (gcd, x
 
 func (r *DensePolyRing) ensureNotNttForm(A *Polynomial) {
 	if A.isNTT {
-		r.NttBackward(A)
+		// Ignoring this error would clear isNTT below on a polynomial still holding
+		// evaluations, silently mislabelling it as coefficients.
+		if err := r.NttBackward(A); err != nil {
+			panic("ensureNotNttForm: " + err.Error())
+		}
 	}
+
 	A.isNTT = false
 }
 

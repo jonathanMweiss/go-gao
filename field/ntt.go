@@ -86,7 +86,7 @@ func (pr *DensePolyRing) getTwiddles(n int) (*twiddleSet, error) {
 	return ts, nil
 }
 
-// Forwards NTT transform of a polynomial a in place. If polynomial is already in NTT form, no operation is performed.
+// NttForward transforms a into the NTT domain in place. If polynomial is already in NTT form, no operation is performed.
 func (pr *DensePolyRing) NttForward(a *Polynomial) error {
 	if a == nil || len(a.inner) == 0 {
 		return nil
@@ -130,6 +130,9 @@ func (pr *DensePolyRing) NttForward(a *Polynomial) error {
 	return nil
 }
 
+// NttBackward transforms a from the NTT domain back to coefficients, in place, and
+// trims trailing zeros. It returns an error if a is not in the NTT domain or its
+// length is not a power of two.
 func (pr *DensePolyRing) NttBackward(a *Polynomial) error {
 	if err := pr.nttBackwardNoTrim(a); err != nil {
 		return err

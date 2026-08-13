@@ -5,10 +5,12 @@ package field
 
 import "errors"
 
+// An Interpolator recovers the polynomial passing through a set of points.
 type Interpolator struct {
 	pr PolyRing
 }
 
+// NewInterpolator returns an Interpolator over the given ring.
 func NewInterpolator(pr PolyRing) *Interpolator {
 	return &Interpolator{pr: pr}
 }
@@ -18,6 +20,9 @@ var (
 	errNonUniqueXs        = errors.New("non-unique x values")
 )
 
+// Interpolate returns the unique polynomial of degree < len(xs) passing through the
+// given points. It returns an error if the lengths differ or the xs are not distinct.
+//
 // Interpolation code follows the Lagrange interpolation method
 // https://en.wikipedia.org/wiki/Lagrange_polynomial
 // This algorithm is optimise to save on operations. It is O(n^2) in total.

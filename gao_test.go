@@ -314,9 +314,7 @@ func BenchmarkDecode(b *testing.B) {
 	}
 
 	for _, k := range ks {
-		k := k // capture
 		for _, ev := range evaluators {
-			ev := ev // capture
 			n := k * 4
 			name := fmt.Sprintf("eval=%s/n=%d/k=%d", ev.name, n, k)
 			b.Run(name, func(b *testing.B) {

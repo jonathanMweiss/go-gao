@@ -9,7 +9,8 @@ import (
 	"strings"
 )
 
-// Polynomials are built through PolyRing.NewPolynomial.
+// Polynomial is a polynomial over a fixed field, held either as coefficients or, after
+// an NTT, as evaluations. Build one with PolyRing.NewPolynomial.
 type Polynomial struct {
 	f     Field
 	inner []uint64
@@ -38,26 +39,15 @@ func preOpVerification(p, q *Polynomial) error {
 	return nil
 }
 
+// IsZero reports whether p is the zero polynomial: every coefficient zero.
 func (p *Polynomial) IsZero() bool {
-	if len(p.inner) == 0 {
-		return true
-	}
-
-	if len(p.inner) == 1 && p.inner[0] == 0 {
-		return true
-	}
-
-	pos := p.leadingCoeffPos()
-	for i := 0; i < pos; i++ {
-		if p.inner[i] != 0 {
-			return false
-		}
-	}
-
-	return true
+	// leadingCoeffPos is negative exactly when no coefficient is non-zero, which also
+	// covers an empty inner.
+	return p.leadingCoeffPos() < 0
 }
 
-// Polynomial must be trim from leading zeros.
+// Equals reports whether p and q are the same polynomial. Both must be trimmed of
+// leading zeros; it returns false for polynomials over different fields or domains.
 func (p *Polynomial) Equals(q *Polynomial) bool {
 	if err := preOpVerification(p, q); err != nil {
 		return false
@@ -85,6 +75,7 @@ func (p *Polynomial) Degree() int {
 	return p.leadingCoeffPos()
 }
 
+// LeadCoeff returns the highest-degree non-zero coefficient, or 0 if p is zero.
 func (p *Polynomial) LeadCoeff() uint64 {
 	if pos := p.leadingCoeffPos(); pos >= 0 {
 		return p.inner[pos]
@@ -121,6 +112,7 @@ func (p *Polynomial) removeLeadingZeroes() {
 	p.inner = p.inner[:lead+1]
 }
 
+// Copy returns a deep copy of p, sharing no memory with it.
 func (p *Polynomial) Copy() *Polynomial {
 	innercopy := make([]uint64, len(p.inner))
 	copy(innercopy, p.inner)
@@ -160,6 +152,7 @@ func (p_ *Polynomial) String() string {
 	return bldr.String()
 }
 
+// ToSlice returns a copy of the coefficients, lowest degree first.
 func (p *Polynomial) ToSlice() []uint64 {
 	list := make([]uint64, len(p.inner))
 	copy(list, p.inner)
@@ -167,10 +160,15 @@ func (p *Polynomial) ToSlice() []uint64 {
 	return list
 }
 
+// NoCopySlice returns the backing coefficient array without copying.
+//
+// Mutating it mutates p, and in the NTT domain resizing it breaks the transform's
+// length invariant. Prefer ToSlice unless the copy is genuinely too costly.
 func (p *Polynomial) NoCopySlice() []uint64 {
 	return p.inner
 }
 
+// IsCoeffMode reports whether p holds coefficients rather than evaluations.
 func (p *Polynomial) IsCoeffMode() bool {
 	return !p.isNTT
 }

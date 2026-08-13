@@ -76,10 +76,26 @@ func (gao *Code) PrimeField() field.Field {
 	return gao.pr.GetField()
 }
 
+// Errors reported by NewCode, Encode and Decode. Test for them with errors.Is.
 var (
+	// Construction.
 	ErrNSmallerThanK   = errors.New("redundancy value `n` must be greater than or equal to data size `k`")
 	ErrNonPositiveK    = errors.New("data size `k` must be positive")
 	ErrUnsupportedSize = errors.New("evaluation strategy does not support the requested codeword length `n`")
+
+	// Encoding: the message does not fit the code, or an element is outside the field.
+	ErrDataTooLarge         = errors.New("data too large")
+	ErrDataElementsTooLarge = errors.New("data elements too large")
+
+	// Decoding.
+	ErrTooManyPoints        = errors.New("too many evaluated points")
+	ErrTooManyMissingPoints = errors.New("too many missing points")
+	ErrMismatchedLengths    = errors.New("mismatched lengths of xs and ys")
+	ErrErasureOutOfRange    = errors.New("erasure index out of range")
+	ErrDuplicateErasure     = errors.New("duplicate erasure index")
+	// ErrDecoding means no message is consistent with the points given, so the error
+	// and erasure budget was exceeded.
+	ErrDecoding = errors.New("decoding error")
 )
 
 // An Option adjusts how NewCode selects its evaluation strategy.
@@ -191,9 +207,10 @@ func selectEvaluator(f field.Field, n int, cfg config) (evaluationMap, error) {
 	return slow, nil
 }
 
-var ErrDataTooLarge = errors.New("data too large")
-var ErrDataElementsTooLarge = errors.New("data elements too large")
-
+// Encode encodes up to k data symbols into a map from evaluation point to value.
+//
+// The map form is what makes erasures expressible: to decode after losing symbols,
+// delete those entries and hand the rest to Decode.
 func (gao *Code) Encode(data []uint64) (map[uint64]uint64, error) {
 	ys, err := gao.EncodeToSlice(data)
 	if err != nil {
@@ -210,10 +227,6 @@ func (gao *Code) Encode(data []uint64) (map[uint64]uint64, error) {
 
 	return points, nil
 }
-
-var ErrTooManyMissingPoints = errors.New("too many missing points")
-var ErrTooManyPoints = errors.New("too many evaluated points")
-var ErrDecoding = errors.New("decoding error")
 
 // Decode recovers the original message from received evaluation points, repairing both
 // corrupted values and missing ones.
@@ -239,8 +252,6 @@ func (gao *Code) Decode(received map[uint64]uint64) ([]uint64, error) {
 
 	return gao.sliceDecode(xs, ys, erased)
 }
-
-var ErrMismatchedLengths = errors.New("mismatched lengths of xs and ys")
 
 func (gao *Code) sliceDecode(xs []uint64, ys []uint64, erased []int) ([]uint64, error) {
 	if len(xs) != len(ys) {
@@ -459,6 +470,7 @@ func (gao *Code) createErasureLocator(erasedIndices []int, xs []uint64) *field.P
 	return gao.pr.Product(polys)
 }
 
+// EncodeToSlice is the positional form of Encode, returning the n values in specific order (do not shuffle).
 func (gao *Code) EncodeToSlice(data []uint64) ([]uint64, error) {
 	f := gao.PrimeField()
 
@@ -491,17 +503,49 @@ func (gao *Code) EncodeToSlice(data []uint64) ([]uint64, error) {
 }
 
 // DecodeFromSlice is the positional form of Decode: ys holds one value per evaluation
-// point, in the order EvaluationPoints returns them, so it cannot express erasures —
-// every position carries a value. Use Decode when some points are missing.
+// point, in the order EvaluationPoints returns them.
 //
-// It returns ErrMismatchedLengths unless len(ys) == n. DecodeFromSlice never modifies ys.
-func (gao *Code) DecodeFromSlice(ys []uint64) ([]uint64, error) {
+// erasedAt lists the indices of positions known to be unusable.
+func (gao *Code) DecodeFromSlice(ys []uint64, erasedAt ...int) ([]uint64, error) {
 	if len(ys) != gao.N() {
 		return nil, ErrMismatchedLengths
+	}
+
+	erased, err := gao.checkErasures(erasedAt)
+	if err != nil {
+		return nil, err
 	}
 
 	// sliceDecode reduces and transforms ys in place, so hand it a copy.
 	work := slices.Clone(ys)
 
-	return gao.sliceDecode(gao.xs, work, nil)
+	return gao.sliceDecode(gao.xs, work, erased)
+}
+
+// checkErasures validates caller-supplied erasure indices.
+func (gao *Code) checkErasures(erasedAt []int) ([]int, error) {
+	if len(erasedAt) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[int]struct{}, len(erasedAt))
+
+	for _, idx := range erasedAt {
+		if idx < 0 || idx >= gao.N() {
+			return nil, fmt.Errorf("%w: %d not in [0, %d)", ErrErasureOutOfRange, idx, gao.N())
+		}
+
+		if _, dup := seen[idx]; dup {
+			return nil, fmt.Errorf("%w: %d", ErrDuplicateErasure, idx)
+		}
+
+		seen[idx] = struct{}{}
+	}
+
+	// dervied from 2e+s <= n-k where e=0 and s=len(erasedAt).
+	if len(erasedAt) > gao.N()-gao.K() {
+		return nil, ErrTooManyMissingPoints
+	}
+
+	return slices.Clone(erasedAt), nil
 }

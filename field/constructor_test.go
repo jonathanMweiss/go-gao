@@ -31,6 +31,33 @@ func TestEmptyCoefficientsYieldZeroPolynomial(t *testing.T) {
 	}
 }
 
+func TestIsZero(t *testing.T) {
+	f, err := NewPrimeField(65537)
+	require.NoError(t, err)
+
+	pr := NewDensePolyRing(f)
+
+	for _, tc := range []struct {
+		name string
+		in   []uint64
+		want bool
+	}{
+		{"empty", nil, true},
+		{"single zero", []uint64{0}, true},
+		{"all zero", []uint64{0, 0, 0}, true},
+		{"constant", []uint64{5}, false},
+		{"x", []uint64{0, 1}, false},
+		{"x^3", []uint64{0, 0, 0, 1}, false},
+		{"5x^2, zero below", []uint64{0, 0, 5}, false},
+		{"5 + x", []uint64{5, 1}, false},
+		{"trailing zeros above a term", []uint64{0, 7, 0, 0}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, pr.NewPolynomial(tc.in, false).IsZero())
+		})
+	}
+}
+
 // TestZeroPolynomialIsUsableInRingOps: constructing the zero polynomial is only useful
 // if the ring then accepts it wherever a zero divisor is not implied.
 func TestZeroPolynomialIsUsableInRingOps(t *testing.T) {
