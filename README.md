@@ -14,7 +14,7 @@ for:
   README is explicit that "the encoder does not know which parts are invalid". This
   decoder repairs both, and a mixture of the two, as long as
   `2*errors + erasures <= n-k`.
-- It works over prime fields.
+- It works over any prime fields that can be represented by 63bits.
 
 The polynomial and finite-field arithmetic underneath are exported as a reusable
 [`field`](./field) package: prime fields, dense polynomial rings, NTT, Lagrange
