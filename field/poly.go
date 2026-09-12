@@ -106,7 +106,15 @@ func (p *Polynomial) removeLeadingZeroes() {
 
 	lead := p.leadingCoeffPos()
 	if lead < 0 {
-		p.inner = []uint64{0}
+		if cap(p.inner) == 0 {
+			p.inner = []uint64{0} // must allocate.
+
+			return
+		}
+
+		// reusing the backing array
+		p.inner = p.inner[:1]
+		p.inner[0] = 0
 
 		return
 	}

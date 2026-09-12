@@ -113,22 +113,35 @@ func (r *PolyRing) productTree(polys []*Polynomial) *Polynomial {
 
 // ---------- utilities ----------
 
+// ensureLen resizes c.inner to exactly n, preserving the coefficients already there and
+// zeroing whatever the resize exposes.
 func ensureLen(c *Polynomial, n int) {
-	if len(c.inner) < n {
+	if cap(c.inner) < n {
 		tmp := make([]uint64, n)
 		copy(tmp, c.inner)
 		c.inner = tmp
-	} else {
-		c.inner = c.inner[:n]
+
+		return
+	}
+
+	old := len(c.inner)
+	c.inner = c.inner[:n]
+
+	if old < n {
+		clear(c.inner[old:])
 	}
 }
 
+// ensureLenCheap resizes c.inner to exactly n without preserving or zeroing anything.
+// The caller must write every element before reading it.
 func ensureLenCheap(c *Polynomial, n int) {
-	if len(c.inner) < n {
+	if cap(c.inner) < n {
 		c.inner = make([]uint64, n)
-	} else {
-		c.inner = c.inner[:n]
+
+		return
 	}
+
+	c.inner = c.inner[:n]
 }
 
 func (r *PolyRing) trimTrailingZeros(p *Polynomial) {
@@ -336,16 +349,21 @@ func (r *PolyRing) mulSchoolbook(a, b, c *Polynomial) {
 	r.trimTrailingZeros(c)
 }
 
-func (r *PolyRing) monomialMultPoly(ai uint64, deg int, p *Polynomial) *Polynomial {
-	newLen := len(p.inner) + deg
-	fld := r.GetField()
-	prod := make([]uint64, newLen)
+// subMonomialMul subtracts ai * x^deg * b from rem, in place.
+//
+// This is one long-division step. Using a specific function rather than Mul+Sub saves
+// allocations and a full-length multiplication per step.
+//
+// The caller guarantees deg(rem) == deg(b)+deg, so rem is long enough to hold every term
+// written here. Coefficients of b above its degree are zero and are skipped: they would
+// contribute nothing, and indexing them is what would run off the end of rem when b
+// carries trailing zeros.
+func (r *PolyRing) subMonomialMul(rem *Polynomial, ai uint64, deg int, b *Polynomial) {
+	fld := r.f
 
-	for i := range p.inner {
-		prod[i+deg] = fld.Mul(ai, p.inner[i])
+	for j, bDeg := 0, b.Degree(); j <= bDeg; j++ {
+		rem.inner[j+deg] = fld.Sub(rem.inner[j+deg], fld.Mul(ai, b.inner[j]))
 	}
-
-	return r.NewPolynomial(prod, p.isNTT)
 }
 
 // Div returns q and rem with a = q*b + rem and deg(rem) < deg(b), choosing between
@@ -419,7 +437,9 @@ func (r *PolyRing) divSchoolbook(a, b *Polynomial) (q *Polynomial, rem *Polynomi
 		// TODO: keeping the degree in a variable might save time.
 		if rem.Degree() == m+i {
 			qInner[i] = fld.Mul(rem.LeadCoeff(), u)
-			r.Sub(rem, r.monomialMultPoly(qInner[i], i, b), rem)
+			// the step rem = rem - qInner[i] * x^i * b is done in place,
+			// so that we don't allocate a new polynomial for each step.
+			r.subMonomialMul(rem, qInner[i], i, b)
 		} else {
 			qInner[i] = 0
 		}
@@ -459,6 +479,13 @@ func (m polyMatrix2x2) Mul(r *PolyRing, other polyMatrix2x2) polyMatrix2x2 {
 	}
 }
 
+// mulVecFirst is MulVec's first component on its own: m.a00*a + m.a01*b.
+//
+// PartialGCD wants only the remainder, not the pair.
+func (m polyMatrix2x2) mulVecFirst(r *PolyRing, a, b *Polynomial) *Polynomial {
+	return polyAdd(r, polyMul(r, m.a00, a), polyMul(r, m.a01, b))
+}
+
 func (m polyMatrix2x2) MulVec(r *PolyRing, a, b *Polynomial) (*Polynomial, *Polynomial) {
 	aOut := polyAdd(r, polyMul(r, m.a00, a), polyMul(r, m.a01, b))
 	bOut := polyAdd(r, polyMul(r, m.a10, a), polyMul(r, m.a11, b))
@@ -474,14 +501,27 @@ func polyIdentity2x2(f Field) polyMatrix2x2 {
 	}
 }
 
-// Creates:
-// |0 1 |
-// |1 -q|
-func stepMatrix(r *PolyRing, q *Polynomial) polyMatrix2x2 {
-	return polyMatrix2x2{
-		a00: polyZero(r.f), a01: polyOne(r.f),
-		a10: polyOne(r.f), a11: polySub(r, polyZero(r.f), q),
-	}
+// applyStep left-multiplies M by the Euclidean step matrix for quotient q,
+//
+//	| 0   1 |
+//	| 1  -q |
+//
+// and returns the product of the two:
+//
+//	(M_{00}, M_{10}) = (M_{10}, M_{00} - q*M_{10})
+//	(M_{01}, M_{11}) = (M_{11}, M_{01} - q*M_{11})
+//
+// writing a specialized function rather than Mul+Sub saves allocations and a full-length multiplication per step.
+func (r *PolyRing) applyStep(M polyMatrix2x2, q *Polynomial) polyMatrix2x2 {
+	// mulSubInto writes a - q*b into a destination that must alias neither.
+	lo := &Polynomial{f: r.f}
+	hi := &Polynomial{f: r.f}
+
+	r.mulSubInto(lo, M.a00, q, M.a10) // lo = M.a00 - q*M.a10
+	r.mulSubInto(hi, M.a01, q, M.a11) // hi = M.a01 - q*M.a11
+
+	// building the new matrix
+	return polyMatrix2x2{a00: M.a10, a01: M.a11, a10: lo, a11: hi}
 }
 
 // partialExtendedEuclidean runs the extended Euclidean algorithm, stopping early.
@@ -605,6 +645,16 @@ func (r *PolyRing) mulViaNTT(a, b, c *Polynomial) {
 	}
 
 	total := la + lb - 1
+
+	// mulTruncInto clears its destination before reading the operands, so it cannot be
+	// pointed at one of them. Where c is distinct it writes straight into c's existing
+	// array; where c aliases, the result is built to the side first.
+	if c != a && c != b {
+		r.mulTruncInto(c, a, b, total)
+
+		return
+	}
+
 	prod := r.mulTrunc(a, b, total) // NTT under the hood, coeff-domain out
 	c.inner = prod.inner
 	c.f, c.isNTT = r.f, false
@@ -832,12 +882,6 @@ func polyAdd(r *PolyRing, a, b *Polynomial) *Polynomial {
 	return out
 }
 
-func polySub(r *PolyRing, a, b *Polynomial) *Polynomial {
-	out := &Polynomial{f: r.f, isNTT: false}
-	r.Sub(a, b, out)
-	return out
-}
-
 // mulSubInto computes dst = a - q*b in one fused pass when q is small,
 // avoiding a temporary allocation for the intermediate product q*b.
 // When q is large, it falls back to mulFull + Sub.
@@ -993,7 +1037,7 @@ func (r *PolyRing) PartialGCD(a, b *Polynomial, stopDegree int) (gcd, x, y *Poly
 	M := r.fastGCDRec(A, B, stopDegree)
 
 	// Apply the final transition matrix to the original inputs to get the desired remainder.
-	AOut, _ := M.MulVec(r, A, B)
+	AOut := M.mulVecFirst(r, A, B)
 	r.trimTrailingZeros(AOut)
 
 	// Return the remainder and its corresponding Bézout coefficients for 'a' and 'b':
@@ -1053,8 +1097,7 @@ func (r *PolyRing) fastGCDRec(a, b *Polynomial, stopDegree int) polyMatrix2x2 {
 	// This step is mandatory to ensure progress. Without it, the algorithm
 	// might call HGCD with the same parameters again, leading to an infinite loop.
 	q, rem := r.Div(aCur, bCur)
-	Mstep := stepMatrix(r, q)
-	M = Mstep.Mul(r, M)
+	M = r.applyStep(M, q)
 
 	// After one division step, the pair is (bCur, rem).
 	// If bCur.Degree() < stopDegree, then bCur is the first remainder with degree < stopDegree.
@@ -1129,8 +1172,7 @@ func (r *PolyRing) hgcd(a, b *Polynomial, m int) polyMatrix2x2 {
 	// 3. Standard Euclidean Step (Mandatory Progress):
 	// Perform one division step to ensure the next recursive call makes progress.
 	q, rem := r.Div(aCur, bCur)
-	Mstep := stepMatrix(r, q)
-	M := Mstep.Mul(r, R)
+	M := r.applyStep(R, q)
 
 	remDeg := rem.Degree()
 	// Check if the reduction target m is met after division.
@@ -1168,8 +1210,7 @@ func (r *PolyRing) iterativePartialExtendedEuclideanMatrix(a, b *Polynomial, sto
 		q, rem := r.Div(A, B)
 		A, B = B, rem
 
-		Mnew := stepMatrix(r, q)
-		M = Mnew.Mul(r, M)
+		M = r.applyStep(M, q)
 	}
 	return M
 }
