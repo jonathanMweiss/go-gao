@@ -23,7 +23,7 @@ type Code struct {
 	k         int
 	maxErrors int
 
-	pr           field.PolyRing
+	pr           *field.PolyRing
 	interpolator *field.Interpolator
 	// g0 polynomial from the Gao code.
 	// with fast EvaluationMaps like NTT, this polynomial can be used to do fast division.
@@ -161,12 +161,12 @@ func NewCode(f field.Field, n, k int, opts ...Option) (*Code, error) {
 		return nil, ErrNSmallerThanK
 	}
 
-	eval, err := selectEvaluator(f, n, cfg)
+	pr := field.NewPolyRing(f)
+
+	eval, err := selectEvaluator(pr, n, cfg)
 	if err != nil {
 		return nil, err
 	}
-
-	pr := field.NewDensePolyRing(f)
 
 	return &Code{
 		eval:      eval,
@@ -183,8 +183,8 @@ func NewCode(f field.Field, n, k int, opts ...Option) (*Code, error) {
 }
 
 // selectEvaluator resolves the strategy, preferring the NTT unless told otherwise.
-func selectEvaluator(f field.Field, n int, cfg config) (evaluationMap, error) {
-	slow := newSlowEvaluator(f)
+func selectEvaluator(pr *field.PolyRing, n int, cfg config) (evaluationMap, error) {
+	slow := newSlowEvaluator(pr)
 
 	if cfg.forceSlow {
 		if err := slow.supportsSize(n); err != nil {
@@ -194,7 +194,7 @@ func selectEvaluator(f field.Field, n int, cfg config) (evaluationMap, error) {
 		return slow, nil
 	}
 
-	ntt := newNttEvaluator(f)
+	ntt := newNttEvaluator(pr)
 
 	nttErr := ntt.supportsSize(n)
 	if nttErr == nil {
@@ -205,7 +205,7 @@ func selectEvaluator(f field.Field, n int, cfg config) (evaluationMap, error) {
 		return nil, fmt.Errorf(
 			"%w: n=%d: RequireNTT was set but this field admits no NTT usable at that length "+
 				"(n and 2n must both be powers of two dividing p-1, p=%d): %w",
-			ErrUnsupportedSize, n, f.Modulus(), nttErr)
+			ErrUnsupportedSize, n, pr.GetField().Modulus(), nttErr)
 	}
 
 	if err := slow.supportsSize(n); err != nil {
@@ -349,7 +349,7 @@ func (gao *Code) decodeGeneric(ys []uint64, xs []uint64, erased []int) (*field.P
 
 	// Optimistic error-free path:
 	// When g_1 has degree < K, it'll be the first polynomial in the Euclidean
-	// remainder sequence below stopDegree, so FastPartialGCD would
+	// remainder sequence below stopDegree, so PartialGCD would
 	// thus, GCD returns g=g1, v=1 with r=0.
 	// Since the return value `f` is defined f=g1/v (and in this case v=1), we return g1 directly.
 	// This is true only when there are no erasures.
@@ -393,7 +393,7 @@ func (gao *Code) decodeNTT(ys, xs []uint64, erased []int) (*field.Polynomial, *f
 
 	// Optimistic error-free path:
 	// When g_1 has degree < K, it'll be the first polynomial in the Euclidean
-	// remainder sequence below stopDegree, so FastPartialGCD would
+	// remainder sequence below stopDegree, so PartialGCD would
 	// thus, GCD returns g=g1, v=1 with r=0.
 	// Since the return value `f` is defined f=g1/v (and in this case v=1), we return g1 directly.
 	// This is true only when there are no erasures.
@@ -409,22 +409,19 @@ func (gao *Code) decodeNTT(ys, xs []uint64, erased []int) (*field.Polynomial, *f
 func (gao *Code) recoverMessage(g1, S *field.Polynomial, stopDegree int) (f, rem *field.Polynomial, err error) {
 	pr := gao.pr
 
-	g, _, v := pr.FastPartialGCD(gao.g0, g1, stopDegree)
+	g, _, v := pr.PartialGCD(gao.g0, g1, stopDegree)
 
-	// A zero error locator would make the divisions below panic. zeroCodewordIsNearest has
-	// already answered the one input that produces one -- an all-zero received word --
-	// so reaching this means the received word admits no consistent message.
+	// can't divide by zero.
 	if v.IsZero() {
 		return nil, nil, ErrDecoding
 	}
 
-	if S == nil {
-		f, rem = pr.Div(g, v)
+	G, remG := pr.Div(g, v)
 
-		return f, rem, nil
+	if S == nil {
+		return G, remG, nil
 	}
 
-	G, remG := pr.Div(g, v)
 	if !remG.IsZero() {
 		return nil, nil, ErrDecoding
 	}

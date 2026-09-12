@@ -8,53 +8,22 @@ import (
 	"sync"
 )
 
-// A PolyRing performs polynomial arithmetic over a fixed coefficient field.
-type PolyRing interface {
-	GetField() Field
-
-	// NewPolynomial builds a polynomial over this ring's field. Coefficients run from
-	// lowest to highest degree; an empty slice yields the zero polynomial.
-	NewPolynomial(inner []uint64, isPointRepresentation bool) *Polynomial
-
-	Evaluate(a *Polynomial, x uint64) uint64
-
-	// Assumes polynomial of valid degree.
-	NttForward(a *Polynomial) error
-	NttBackward(a *Polynomial) error
-
-	// compute c = a + b
-	Add(a, b, c *Polynomial)
-	// compute c = a - b
-	Sub(a, b, c *Polynomial)
-
-	// compute c = a * scalar
-	MulScalar(a *Polynomial, scalar uint64, c *Polynomial)
-
-	// compute c = a * b
-	// performs smart dispatch between schoolbook and NTT based
-	// on size and NTT support of the inner field.
-	Mul(a, b, c *Polynomial)
-
-	// Product multiplies a whole slice via a divide-and-conquer product tree,
-	// in O(n log^2 n). An empty slice yields the constant polynomial p(x) = 1.
-	Product(polys []*Polynomial) *Polynomial
-
-	// Creates quotient q and remainder r.
-	// chooses the algorithm based on size and NTT support of the inner field.
-	Div(a, b *Polynomial) (q *Polynomial, r *Polynomial)
-
-	// Extended Euclidean algorithm.
-	PartialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial)
-
-	// Uses the half-GCD algorithm, less suitable for small inputs but asymptotically faster than PartialExtendedEuclidean.
-	FastPartialGCD(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial)
-}
-
 const nttMulThreshold = 16 // ~coeff count where NTT starts winning
 
-// DensePolyRing implements PolyRing with optional NTT domain for polynomials.
-type DensePolyRing struct {
-	Field
+// A PolyRing performs polynomial arithmetic over a fixed coefficient field.
+//
+// Most operations write into a caller-supplied destination rather than allocating, so
+// that a loop can reuse one polynomial: Add, Sub, Mul and MulScalar all take c as their
+// last argument, and c may alias an input. Several dispatch on size; Mul and Div pick
+// between schoolbook and NTT-based algorithms according to the operand lengths and what
+// the field supports. Thus, a caller does not choose an algorithm, only a ring.
+//
+// A ring caches NTT twiddle factors, so reusing one across many operations over the same
+// field is cheaper than building a ring per call.
+//
+// A *PolyRing is safe for concurrent use.
+type PolyRing struct {
+	f            Field
 	mu           sync.RWMutex
 	twiddleCache map[int]*twiddleSet // key: n
 }
@@ -70,28 +39,28 @@ var nttMulScratchPool = sync.Pool{
 	},
 }
 
-// NewDensePolyRing constructs a ring over the provided coefficient field.
+// NewPolyRing returns a ring performing polynomial arithmetic over f.
 //
 // It panics if f is nil.
-func NewDensePolyRing(f Field) PolyRing {
+func NewPolyRing(f Field) *PolyRing {
 	if f == nil {
-		panic("NewDensePolyRing: nil field")
+		panic("NewPolyRing: nil field")
 	}
 
-	return &DensePolyRing{
-		Field:        f,
+	return &PolyRing{
+		f:            f,
 		twiddleCache: map[int]*twiddleSet{},
 	}
 }
 
 // GetField returns the coefficient field this ring operates over.
-func (r *DensePolyRing) GetField() Field { return r.Field }
+func (r *PolyRing) GetField() Field { return r.f }
 
 // NewPolynomial builds a polynomial over this ring's field from coefficients ordered
 // from lowest to highest degree. An empty inner yields the zero polynomial.
 //
 // The polynomial takes ownership of inner rather than copying it.
-func (r *DensePolyRing) NewPolynomial(inner []uint64, isPointRepresentation bool) *Polynomial {
+func (r *PolyRing) NewPolynomial(inner []uint64, isPointRepresentation bool) *Polynomial {
 	// An empty sum of terms is zero.
 	if len(inner) == 0 {
 		inner = []uint64{0}
@@ -100,7 +69,7 @@ func (r *DensePolyRing) NewPolynomial(inner []uint64, isPointRepresentation bool
 	return &Polynomial{
 		inner: inner,
 		isNTT: isPointRepresentation,
-		f:     r.Field,
+		f:     r.f,
 	}
 }
 
@@ -111,10 +80,10 @@ func (r *DensePolyRing) NewPolynomial(inner []uint64, isPointRepresentation bool
 // An empty slice yields the constant polynomial p(x) = 1
 //
 // polys is only read; the result never aliases any of its elements.
-func (r *DensePolyRing) Product(polys []*Polynomial) *Polynomial {
+func (r *PolyRing) Product(polys []*Polynomial) *Polynomial {
 	switch len(polys) {
 	case 0:
-		return makeConstantPoly(r.Field, 1)
+		return makeConstantPoly(r.f, 1)
 	case 1:
 		// Copy, so the caller cannot mutate the result through the input slice.
 		return polys[0].Copy()
@@ -127,7 +96,7 @@ func (r *DensePolyRing) Product(polys []*Polynomial) *Polynomial {
 // uncopied, which is safe because Mul only ever reads its operands: the NTT path copies
 // both into scratch buffers before transforming, and the schoolbook path writes solely
 // to its output. Every internal node therefore returns a freshly allocated polynomial.
-func (r *DensePolyRing) productTree(polys []*Polynomial) *Polynomial {
+func (r *PolyRing) productTree(polys []*Polynomial) *Polynomial {
 	if len(polys) == 1 {
 		return polys[0]
 	}
@@ -162,14 +131,14 @@ func ensureLenCheap(c *Polynomial, n int) {
 	}
 }
 
-func (r *DensePolyRing) trimTrailingZeros(p *Polynomial) {
+func (r *PolyRing) trimTrailingZeros(p *Polynomial) {
 	if len(p.inner) == 0 || p.isNTT {
 		// In NTT domain we keep the fixed size.
 		return
 	}
 
 	i := len(p.inner) - 1
-	for i >= 0 && r.Equals(p.inner[i], 0) {
+	for i >= 0 && r.f.Equals(p.inner[i], 0) {
 		i--
 	}
 	p.inner = p.inner[:i+1]
@@ -178,10 +147,16 @@ func (r *DensePolyRing) trimTrailingZeros(p *Polynomial) {
 // ---------- Poly ops ----------
 
 // Evaluate returns a(x) by Horner's rule.
-// should receive a polynomial in coefficient form, not NTT form.
-func (r *DensePolyRing) Evaluate(a *Polynomial, x uint64) uint64 {
+//
+// It panics if a is in the NTT domain: Horner over point values is not the value of the
+// polynomial anywhere, and returning that number quietly would be worse than stopping.
+func (r *PolyRing) Evaluate(a *Polynomial, x uint64) uint64 {
+	if a.isNTT {
+		panic("Evaluate expects a coefficient-domain polynomial")
+	}
+
 	result := uint64(0)
-	fld := r.Field
+	fld := r.f
 
 	// horner's rule:
 	for i := len(a.inner) - 1; i >= 0; i-- {
@@ -192,8 +167,8 @@ func (r *DensePolyRing) Evaluate(a *Polynomial, x uint64) uint64 {
 }
 
 // MulScalar computes c = a * scalar, preserving a's domain. c may alias a.
-func (r *DensePolyRing) MulScalar(a *Polynomial, scalar uint64, c *Polynomial) {
-	s := r.Reduce(scalar)
+func (r *PolyRing) MulScalar(a *Polynomial, scalar uint64, c *Polynomial) {
+	s := r.f.Reduce(scalar)
 	f := r.GetField()
 
 	ensureLen(c, len(a.inner))
@@ -201,7 +176,7 @@ func (r *DensePolyRing) MulScalar(a *Polynomial, scalar uint64, c *Polynomial) {
 		c.inner[i] = f.Mul(a.inner[i], s)
 	}
 
-	c.f = r.Field
+	c.f = r.f
 	c.isNTT = a.isNTT // scalar mult preserves domain
 
 	r.trimTrailingZeros(c)
@@ -210,7 +185,7 @@ func (r *DensePolyRing) MulScalar(a *Polynomial, scalar uint64, c *Polynomial) {
 // Add computes c = a + b. c may alias a or b.
 //
 // It panics if a and b are over different fields or in different domains.
-func (r *DensePolyRing) Add(a, b, c *Polynomial) {
+func (r *PolyRing) Add(a, b, c *Polynomial) {
 	if err := preOpVerification(a, b); err != nil {
 		panic(err)
 	}
@@ -220,18 +195,18 @@ func (r *DensePolyRing) Add(a, b, c *Polynomial) {
 	n := max(alen, blen)
 	ensureLen(c, n)
 
-	f := r.Field
+	f := r.f
 
 	var av, bv uint64
 	for i := 0; i < n; i++ {
 		if i < alen {
-			av = r.Reduce(a.inner[i])
+			av = r.f.Reduce(a.inner[i])
 		} else {
 			av = 0
 		}
 
 		if i < blen {
-			bv = r.Reduce(b.inner[i])
+			bv = r.f.Reduce(b.inner[i])
 		} else {
 			bv = 0
 		}
@@ -239,7 +214,7 @@ func (r *DensePolyRing) Add(a, b, c *Polynomial) {
 		c.inner[i] = f.Add(av, bv)
 	}
 
-	c.f = r.Field
+	c.f = r.f
 	c.isNTT = a.isNTT
 	r.trimTrailingZeros(c)
 }
@@ -247,12 +222,12 @@ func (r *DensePolyRing) Add(a, b, c *Polynomial) {
 // Sub computes c = a - b. c may alias a or b.
 //
 // It panics if a and b are over different fields or in different domains.
-func (r *DensePolyRing) Sub(a, b, c *Polynomial) {
+func (r *PolyRing) Sub(a, b, c *Polynomial) {
 	if err := preOpVerification(a, b); err != nil {
 		panic(err)
 	}
 
-	c.f = r.Field
+	c.f = r.f
 	c.isNTT = a.isNTT
 
 	alen := len(a.inner)
@@ -261,7 +236,7 @@ func (r *DensePolyRing) Sub(a, b, c *Polynomial) {
 	ensureLen(c, n)
 	minLen := min(alen, blen)
 
-	f := r.Field
+	f := r.f
 
 	// Subtract overlapping part
 	for i := 0; i < minLen; i++ {
@@ -285,14 +260,14 @@ func (r *DensePolyRing) Sub(a, b, c *Polynomial) {
 // Mul computes c = a * b, choosing between schoolbook and NTT-based multiplication by size.
 //
 // It panics if a and b are over different fields or in different domains.
-func (r *DensePolyRing) Mul(a, b, c *Polynomial) {
+func (r *PolyRing) Mul(a, b, c *Polynomial) {
 	if err := preOpVerification(a, b); err != nil {
 		panic(err)
 	}
 
 	la, lb := len(a.inner), len(b.inner)
 	if la == 0 || lb == 0 {
-		c.f, c.inner, c.isNTT = r.Field, c.inner[:0], a.isNTT
+		c.f, c.inner, c.isNTT = r.f, c.inner[:0], a.isNTT
 		return
 	}
 
@@ -303,7 +278,7 @@ func (r *DensePolyRing) Mul(a, b, c *Polynomial) {
 		ensureLen(c, n)
 		r.pointwiseMult(a, b, c)
 
-		c.f = r.Field
+		c.f = r.f
 		c.isNTT = true
 		return
 	}
@@ -317,7 +292,7 @@ func (r *DensePolyRing) Mul(a, b, c *Polynomial) {
 	r.mulViaNTT(a, b, c)
 }
 
-func (r *DensePolyRing) mulSchoolbook(a, b, c *Polynomial) {
+func (r *PolyRing) mulSchoolbook(a, b, c *Polynomial) {
 	if err := preOpVerification(a, b); err != nil {
 		panic(err)
 	}
@@ -326,7 +301,7 @@ func (r *DensePolyRing) mulSchoolbook(a, b, c *Polynomial) {
 		panic("mulSchoolbook cannot handle NTT polynomials")
 	}
 
-	f := r.Field
+	f := r.f
 
 	newLen := len(a.inner) + len(b.inner) - 1
 
@@ -361,7 +336,7 @@ func (r *DensePolyRing) mulSchoolbook(a, b, c *Polynomial) {
 	r.trimTrailingZeros(c)
 }
 
-func (r *DensePolyRing) monomialMultPoly(ai uint64, deg int, p *Polynomial) *Polynomial {
+func (r *PolyRing) monomialMultPoly(ai uint64, deg int, p *Polynomial) *Polynomial {
 	newLen := len(p.inner) + deg
 	fld := r.GetField()
 	prod := make([]uint64, newLen)
@@ -373,13 +348,16 @@ func (r *DensePolyRing) monomialMultPoly(ai uint64, deg int, p *Polynomial) *Pol
 	return r.NewPolynomial(prod, p.isNTT)
 }
 
-// Div returns the quotient and remainder of a divided by b, choosing between schoolbook
-// and NTT-based division by size.
+// Div returns q and rem with a = q*b + rem and deg(rem) < deg(b), choosing between
+// schoolbook and NTT-based division by size.
 //
-// similar to standard division, this function panics when its input doesn't make sense:
-// a or b must not be nil, or in the NTT domain; they must have the same field, and
-// b must not be the zero polynomial.
-func (r *DensePolyRing) Div(a, b *Polynomial) (q *Polynomial, rem *Polynomial) {
+// Like Add, Sub and Mul it panics rather than reporting malformed input: a nil
+// polynomial, operands over different fields, or an operand in the NTT domain (call
+// NttBackward first). Dividing by the zero polynomial panics for the same reason
+// integer division by zero does, and for the same reason math/big panics; the
+// quotient does not exist, and a caller that can reach a zero divisor is expected to
+// say what it means before dividing, not afterwards.
+func (r *PolyRing) Div(a, b *Polynomial) (q *Polynomial, rem *Polynomial) {
 	if a == nil || b == nil {
 		panic("Div: nil polynomial")
 	}
@@ -396,11 +374,11 @@ func (r *DensePolyRing) Div(a, b *Polynomial) (q *Polynomial, rem *Polynomial) {
 	aDeg := a.Degree()
 
 	if bDeg < 0 {
-		panic("division by zero polynomial")
+		panic("division by the zero polynomial")
 	}
 
 	if aDeg < bDeg {
-		return polyZero(r.Field), a.Copy()
+		return polyZero(r.f), a.Copy()
 	}
 
 	quotLen := aDeg - bDeg + 1
@@ -420,11 +398,11 @@ func (r *DensePolyRing) Div(a, b *Polynomial) (q *Polynomial, rem *Polynomial) {
 // `Modern Computer Algebra` by Joachim von zur Gathen and Jürgen Gerhard
 //
 // returns q, r such that p = q*v + r.
-func (r *DensePolyRing) divSchoolbook(a, b *Polynomial) (q *Polynomial, rem *Polynomial) {
+func (r *PolyRing) divSchoolbook(a, b *Polynomial) (q *Polynomial, rem *Polynomial) {
 	if err := preOpVerification(a, b); err != nil {
 		panic(err)
 	}
-	fld := r.Field
+	fld := r.f
 
 	if b.isNTT {
 		panic("divSchoolbook expects coefficient-domain polynomials")
@@ -472,7 +450,7 @@ type polyMatrix2x2 struct {
 	a10, a11 *Polynomial
 }
 
-func (m polyMatrix2x2) Mul(r *DensePolyRing, other polyMatrix2x2) polyMatrix2x2 {
+func (m polyMatrix2x2) Mul(r *PolyRing, other polyMatrix2x2) polyMatrix2x2 {
 	return polyMatrix2x2{
 		a00: polyAdd(r, polyMul(r, m.a00, other.a00), polyMul(r, m.a01, other.a10)),
 		a01: polyAdd(r, polyMul(r, m.a00, other.a01), polyMul(r, m.a01, other.a11)),
@@ -481,7 +459,7 @@ func (m polyMatrix2x2) Mul(r *DensePolyRing, other polyMatrix2x2) polyMatrix2x2 
 	}
 }
 
-func (m polyMatrix2x2) MulVec(r *DensePolyRing, a, b *Polynomial) (*Polynomial, *Polynomial) {
+func (m polyMatrix2x2) MulVec(r *PolyRing, a, b *Polynomial) (*Polynomial, *Polynomial) {
 	aOut := polyAdd(r, polyMul(r, m.a00, a), polyMul(r, m.a01, b))
 	bOut := polyAdd(r, polyMul(r, m.a10, a), polyMul(r, m.a11, b))
 	return aOut, bOut
@@ -497,20 +475,20 @@ func polyIdentity2x2(f Field) polyMatrix2x2 {
 }
 
 // Creates:
-// |1 0 |
+// |0 1 |
 // |1 -q|
-func stepMatrix(r *DensePolyRing, q *Polynomial) polyMatrix2x2 {
+func stepMatrix(r *PolyRing, q *Polynomial) polyMatrix2x2 {
 	return polyMatrix2x2{
-		a00: polyZero(r.Field), a01: polyOne(r.Field),
-		a10: polyOne(r.Field), a11: polySub(r, polyZero(r.Field), q),
+		a00: polyZero(r.f), a01: polyOne(r.f),
+		a10: polyOne(r.f), a11: polySub(r, polyZero(r.f), q),
 	}
 }
 
-// PartialExtendedEuclidean runs the extended Euclidean algorithm, stopping early.
+// partialExtendedEuclidean runs the extended Euclidean algorithm, stopping early.
 //
 // returns r= gcd(a,b), x, y such that ax + by = r.
 // where r.Degree() < stopDegree. For full GCD, use stopDegree=0.
-func (r *DensePolyRing) PartialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial) {
+func (r *PolyRing) partialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial) {
 	// Work on local copies ensuring inputs aren't mutated.
 	A := a.Copy()
 	B := b.Copy()
@@ -520,11 +498,11 @@ func (r *DensePolyRing) PartialExtendedEuclidean(a, b *Polynomial, stopDegree in
 	// M is the matrix that begins as identity, and each iteration it is updated by left-multiplying the Bézout matrix of the current division step:
 	// M =  a00 a01 = 1 0
 	//      a10 a11   0 1
-	M := polyIdentity2x2(r.Field)
+	M := polyIdentity2x2(r.f)
 
 	// Reusable temporaries (avoid allocations).
-	tmp1 := &Polynomial{f: r.Field} // holds q*M10 or q*M11
-	tmp2 := &Polynomial{f: r.Field} // holds M00 - q*M10 or M01 - q*M11
+	tmp1 := &Polynomial{f: r.f} // holds q*M10 or q*M11
+	tmp2 := &Polynomial{f: r.f} // holds M00 - q*M10 or M01 - q*M11
 
 	// Bezout identity is GCD(A,B)= ax +by.
 	// letsdive into the iterative algorithm.
@@ -581,8 +559,8 @@ func (r *DensePolyRing) PartialExtendedEuclidean(a, b *Polynomial, stopDegree in
 // p's top coefficient is zero -- routine for a quotient series -- and an earlier version
 // that found its own anchor by scanning for the degree silently shifted the quotient
 // down by one degree for every low-order zero of the dividend.
-func (r *DensePolyRing) rev(p *Polynomial, L int) *Polynomial {
-	out := &Polynomial{f: r.Field, isNTT: false}
+func (r *PolyRing) rev(p *Polynomial, L int) *Polynomial {
+	out := &Polynomial{f: r.f, isNTT: false}
 	if L <= 0 {
 		return out
 	}
@@ -591,7 +569,7 @@ func (r *DensePolyRing) rev(p *Polynomial, L int) *Polynomial {
 
 	for i := range out.inner {
 		if j := L - 1 - i; j < len(p.inner) {
-			out.inner[i] = r.Reduce(p.inner[j])
+			out.inner[i] = r.f.Reduce(p.inner[j])
 		} // else leave as zero
 	}
 
@@ -602,7 +580,7 @@ func nextPow2(n int) int {
 	return 1 << (bits.Len(uint(n - 1)))
 }
 
-func (r *DensePolyRing) mulViaNTT(a, b, c *Polynomial) {
+func (r *PolyRing) mulViaNTT(a, b, c *Polynomial) {
 	if err := preOpVerification(a, b); err != nil {
 		panic(err)
 	}
@@ -610,7 +588,7 @@ func (r *DensePolyRing) mulViaNTT(a, b, c *Polynomial) {
 	// else, use mulTrunc with total length (coeff-domain out)
 	la, lb := len(a.inner), len(b.inner)
 	if la == 0 || lb == 0 {
-		c.f, c.inner, c.isNTT = r.Field, c.inner[:0], false
+		c.f, c.inner, c.isNTT = r.f, c.inner[:0], false
 		return
 	}
 
@@ -620,7 +598,7 @@ func (r *DensePolyRing) mulViaNTT(a, b, c *Polynomial) {
 		ensureLen(c, n)
 		r.pointwiseMult(a, b, c)
 
-		c.f = r.Field
+		c.f = r.f
 		c.isNTT = true
 
 		return
@@ -629,17 +607,17 @@ func (r *DensePolyRing) mulViaNTT(a, b, c *Polynomial) {
 	total := la + lb - 1
 	prod := r.mulTrunc(a, b, total) // NTT under the hood, coeff-domain out
 	c.inner = prod.inner
-	c.f, c.isNTT = r.Field, false
+	c.f, c.isNTT = r.f, false
 }
 
-func (r *DensePolyRing) pointwiseMult(a, b, c *Polynomial) {
-	f := r.Field
+func (r *PolyRing) pointwiseMult(a, b, c *Polynomial) {
+	f := r.f
 	for i := range c.inner {
 		c.inner[i] = f.Mul(a.inner[i], b.inner[i])
 	}
 }
 
-func (r *DensePolyRing) getNttMulScratch(n int) *nttMulScratch {
+func (r *PolyRing) getNttMulScratch(n int) *nttMulScratch {
 	s := nttMulScratchPool.Get().(*nttMulScratch)
 
 	if cap(s.a) < n {
@@ -659,20 +637,20 @@ func (r *DensePolyRing) getNttMulScratch(n int) *nttMulScratch {
 	return s
 }
 
-func (r *DensePolyRing) putNttMulScratch(s *nttMulScratch) {
+func (r *PolyRing) putNttMulScratch(s *nttMulScratch) {
 	nttMulScratchPool.Put(s)
 }
 
 // Multiply polynomials and then truncate to the lowest L terms.
 // Use NTT under the hood (size = nextPow2(L + L - 1)), then slice [:L].
-func (r *DensePolyRing) mulTrunc(a, b *Polynomial, L int) *Polynomial {
-	out := &Polynomial{f: r.Field, isNTT: false}
+func (r *PolyRing) mulTrunc(a, b *Polynomial, L int) *Polynomial {
+	out := &Polynomial{f: r.f, isNTT: false}
 	r.mulTruncInto(out, a, b, L)
 	return out
 }
 
-func (r *DensePolyRing) mulTruncInto(dst *Polynomial, a, b *Polynomial, L int) {
-	dst.f = r.Field
+func (r *PolyRing) mulTruncInto(dst *Polynomial, a, b *Polynomial, L int) {
+	dst.f = r.f
 	dst.isNTT = false
 
 	if L <= 0 {
@@ -707,8 +685,8 @@ func (r *DensePolyRing) mulTruncInto(dst *Polynomial, a, b *Polynomial, L int) {
 	copy(scratch.a[:la], a.inner[:la])
 	copy(scratch.b[:lb], b.inner[:lb])
 
-	aNTT := &Polynomial{f: r.Field, inner: scratch.a, isNTT: false}
-	bNTT := &Polynomial{f: r.Field, inner: scratch.b, isNTT: false}
+	aNTT := &Polynomial{f: r.f, inner: scratch.a, isNTT: false}
+	bNTT := &Polynomial{f: r.f, inner: scratch.b, isNTT: false}
 
 	if err := r.NttForward(aNTT); err != nil {
 		panic(err)
@@ -737,21 +715,21 @@ func (r *DensePolyRing) mulTruncInto(dst *Polynomial, a, b *Polynomial, L int) {
 //   - b is in coefficient domain (isNTT == false)
 //   - k >= 1
 //   - b.inner[0] != 0 (invertible constant term)
-func (r *DensePolyRing) seriesInverse(b *Polynomial, k int) *Polynomial {
+func (r *PolyRing) seriesInverse(b *Polynomial, k int) *Polynomial {
 	if k <= 0 {
-		return &Polynomial{f: r.Field, isNTT: false}
+		return &Polynomial{f: r.f, isNTT: false}
 	}
-	if len(b.inner) == 0 || r.Equals(b.inner[0], 0) {
+	if len(b.inner) == 0 || r.f.Equals(b.inner[0], 0) {
 		panic("seriesInverse: constant term is zero")
 	}
 
-	b0 := r.Reduce(b.inner[0])
-	t := &Polynomial{f: r.Field, isNTT: false, inner: []uint64{r.Inverse(b0)}}
-	tmp := &Polynomial{f: r.Field, isNTT: false}
-	next := &Polynomial{f: r.Field, isNTT: false}
-	two := r.Reduce(2)
+	b0 := r.f.Reduce(b.inner[0])
+	t := &Polynomial{f: r.f, isNTT: false, inner: []uint64{r.f.Inverse(b0)}}
+	tmp := &Polynomial{f: r.f, isNTT: false}
+	next := &Polynomial{f: r.f, isNTT: false}
+	two := r.f.Reduce(2)
 
-	f := r.Field
+	f := r.f
 	for l := 1; l < k; {
 		m := l << 1
 		if m > k {
@@ -779,7 +757,7 @@ func (r *DensePolyRing) seriesInverse(b *Polynomial, k int) *Polynomial {
 //
 // The algorithm capitalize the notion that Newton Iteration can be used to compute the inverse of
 // a polynomial in O(n log n) time.
-func (r *DensePolyRing) divViaNTT(a, b *Polynomial) (q, rem *Polynomial) {
+func (r *PolyRing) divViaNTT(a, b *Polynomial) (q, rem *Polynomial) {
 	if a == nil || b == nil || a.isNTT || b.isNTT {
 		panic("LongDivNTT expects non-nil coefficient-domain polynomials")
 	}
@@ -791,7 +769,7 @@ func (r *DensePolyRing) divViaNTT(a, b *Polynomial) (q, rem *Polynomial) {
 	}
 	if n < m {
 		// q = 0, r = a
-		return &Polynomial{f: r.Field, isNTT: false, inner: []uint64{0}}, a.Copy()
+		return &Polynomial{f: r.f, isNTT: false, inner: []uint64{0}}, a.Copy()
 	}
 
 	k := n - m + 1 // quotient length
@@ -801,7 +779,7 @@ func (r *DensePolyRing) divViaNTT(a, b *Polynomial) (q, rem *Polynomial) {
 	Bstar := r.rev(b, m+1) // m+1 means full reversal of b.
 
 	// lead(b) maps to Bstar[0]; must be invertible
-	if len(Bstar.inner) == 0 || r.Equals(Bstar.inner[0], 0) {
+	if len(Bstar.inner) == 0 || r.f.Equals(Bstar.inner[0], 0) {
 		panic("division by polynomial with zero leading coefficient")
 	}
 
@@ -809,7 +787,7 @@ func (r *DensePolyRing) divViaNTT(a, b *Polynomial) (q, rem *Polynomial) {
 	T := r.seriesInverse(Bstar, k) // length k
 
 	// 3) Q* = A* * T mod x^k
-	Qstar := &Polynomial{f: r.Field, isNTT: false}
+	Qstar := &Polynomial{f: r.f, isNTT: false}
 	r.mulTruncInto(Qstar, Astar, T, k)
 
 	// 4) Reverse Q* back into q, over the quotient length k rather than Q*'s own degree.
@@ -819,22 +797,22 @@ func (r *DensePolyRing) divViaNTT(a, b *Polynomial) (q, rem *Polynomial) {
 	q = r.rev(Qstar, k)
 
 	// 5) rem = a − q*b
-	prod := &Polynomial{f: r.Field, isNTT: false}
+	prod := &Polynomial{f: r.f, isNTT: false}
 	r.mulTruncInto(prod, q, b, n+1) // full product length (deg = n)
-	rem = &Polynomial{f: r.Field, isNTT: false}
+	rem = &Polynomial{f: r.f, isNTT: false}
 	r.Sub(a, prod, rem)      // coeff-domain subtraction
 	r.trimTrailingZeros(rem) // ensure deg(rem) < deg(b)
 
 	return q, rem
 }
 
-func (r *DensePolyRing) canUseNTTConvolutionLen(convLen int) bool {
+func (r *PolyRing) canUseNTTConvolutionLen(convLen int) bool {
 	if convLen <= 0 {
 		return false
 	}
 
 	n := nextPow2(convLen)
-	modMinusOne := r.Modulus() - 1
+	modMinusOne := r.f.Modulus() - 1
 	if uint64(n) > modMinusOne {
 		return false
 	}
@@ -842,20 +820,20 @@ func (r *DensePolyRing) canUseNTTConvolutionLen(convLen int) bool {
 	return modMinusOne%uint64(n) == 0
 }
 
-func polyMul(r *DensePolyRing, a, b *Polynomial) *Polynomial {
-	out := &Polynomial{f: r.Field, isNTT: false}
+func polyMul(r *PolyRing, a, b *Polynomial) *Polynomial {
+	out := &Polynomial{f: r.f, isNTT: false}
 	r.Mul(a, b, out)
 	return out
 }
 
-func polyAdd(r *DensePolyRing, a, b *Polynomial) *Polynomial {
-	out := &Polynomial{f: r.Field, isNTT: false}
+func polyAdd(r *PolyRing, a, b *Polynomial) *Polynomial {
+	out := &Polynomial{f: r.f, isNTT: false}
 	r.Add(a, b, out)
 	return out
 }
 
-func polySub(r *DensePolyRing, a, b *Polynomial) *Polynomial {
-	out := &Polynomial{f: r.Field, isNTT: false}
+func polySub(r *PolyRing, a, b *Polynomial) *Polynomial {
+	out := &Polynomial{f: r.f, isNTT: false}
 	r.Sub(a, b, out)
 	return out
 }
@@ -864,13 +842,13 @@ func polySub(r *DensePolyRing, a, b *Polynomial) *Polynomial {
 // avoiding a temporary allocation for the intermediate product q*b.
 // When q is large, it falls back to mulFull + Sub.
 // All polynomials must be in coefficient domain.
-func (r *DensePolyRing) mulSubInto(dst, a, q, b *Polynomial) {
+func (r *PolyRing) mulSubInto(dst, a, q, b *Polynomial) {
 	lq := len(q.inner)
 	lb := len(b.inner)
 
 	// If q or b is empty, dst = a.
 	if lq == 0 || lb == 0 {
-		dst.f = r.Field
+		dst.f = r.f
 		dst.isNTT = false
 		ensureLen(dst, len(a.inner))
 		copy(dst.inner, a.inner)
@@ -879,7 +857,7 @@ func (r *DensePolyRing) mulSubInto(dst, a, q, b *Polynomial) {
 
 	// For large q, fall back to mulFull + Sub with a temporary.
 	if min(lq, lb) > nttMulThreshold {
-		tmp := &Polynomial{f: r.Field}
+		tmp := &Polynomial{f: r.f}
 		r.Mul(q, b, tmp)
 		r.Sub(a, tmp, dst)
 		return
@@ -890,7 +868,7 @@ func (r *DensePolyRing) mulSubInto(dst, a, q, b *Polynomial) {
 	prodLen := lq + lb - 1
 	n := max(len(a.inner), prodLen)
 
-	f := r.Field
+	f := r.f
 	dst.f = f
 	dst.isNTT = false
 	ensureLenCheap(dst, n)
@@ -919,20 +897,27 @@ func (r *DensePolyRing) mulSubInto(dst, a, q, b *Polynomial) {
 	r.trimTrailingZeros(dst)
 }
 
-// NttPartialExtendedEuclidean is PartialExtendedEuclidean using NTT-based division steps.
+// nttPartialExtendedEuclidean is partialExtendedEuclidean with the matrix bookkeeping
+// fused: it carries the transpose of the transition matrix so that each update is one
+// mulSubInto rather than a separate Mul and Sub into two temporaries.
 //
-// for full explanation on the iterative algorithm go to PartialExtendedEuclidean.
-// This is the same algorithm but uses schoolbook/DivNTT steps.
-func (r *DensePolyRing) NttPartialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial) {
+// For the algorithm itself and the invariant it maintains, see partialExtendedEuclidean.
+//
+// Nothing reaches this from PartialGCD: below hgcdThreshold the recursion bottoms out
+// into iterativePartialExtendedEuclideanMatrix instead, which needs the matrix itself in
+// order to compose with the levels above it and so pays for a full 2x2 multiply per step.
+// Teaching that one the fused update is an open optimization, and this is the worked
+// version of it; both are held to partialExtendedEuclidean by the agreement tests.
+func (r *PolyRing) nttPartialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial) {
 	// Work on local copies ensuring inputs aren't mutated (coeff domain expected).
 	A := a.Copy()
 	B := b.Copy()
 	A.isNTT, B.isNTT = false, false
 
-	M := polyIdentity2x2(r.Field)
+	M := polyIdentity2x2(r.f)
 
 	// Reusable temporaries (avoid allocations in the single-step path).
-	tmp := &Polynomial{f: r.Field}
+	tmp := &Polynomial{f: r.f}
 
 	degA := A.Degree()
 	degB := B.Degree()
@@ -979,15 +964,24 @@ Terminology:
 // at n = 2048, 8192 and 32768, worth 2-8% over the previous 128.
 const hgcdThreshold = 256
 
-/*
-FastPartialGCD finds the first remainder in the Euclidean sequence of (a, b)
-whose degree is strictly less than stopDegree.
-
-Works on Copies of A and B.
-
-Complexity: O(n log^2 n).
-*/
-func (r *DensePolyRing) FastPartialGCD(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial) {
+// PartialGCD runs the extended Euclidean algorithm on (a, b) and stops early, at the
+// first remainder in the Euclidean sequence whose degree is strictly less than
+// stopDegree. It returns that remainder along with the Bezout coefficients producing
+// it: gcd = x*a + y*b. Pass stopDegree = 0 for an ordinary GCD.
+//
+// Stopping early is what a Reed-Solomon decoder wants. Gao's algorithm halts the
+// sequence at (n+k)/2 and reads the message straight out of the pair it stops on,
+// rather than running to the true GCD and working backwards.
+//
+// a and b are only read; both are copied, and an operand in the NTT domain is
+// transformed back before use.
+//
+// Which algorithm runs is not the caller's choice. Below hgcdThreshold the classical
+// quadratic sequence is faster outright, and the half-GCD recursion -- O(n log^2 n),
+// and an order of magnitude ahead by n = 32768 -- only pays above it. PartialGCD picks
+// by degree, so the crossover stays a number this package can re-measure rather than a
+// decision frozen into the API.
+func (r *PolyRing) PartialGCD(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial) {
 	// We work on copies to preserve the original inputs.
 	A := a.Copy()
 	B := b.Copy()
@@ -1007,7 +1001,7 @@ func (r *DensePolyRing) FastPartialGCD(a, b *Polynomial, stopDegree int) (gcd, x
 	return AOut, M.a00, M.a01
 }
 
-func (r *DensePolyRing) ensureNotNttForm(A *Polynomial) {
+func (r *PolyRing) ensureNotNttForm(A *Polynomial) {
 	if A.isNTT {
 		// Ignoring this error would clear isNTT below on a polynomial still holding
 		// evaluations, silently mislabelling it as coefficients.
@@ -1027,11 +1021,11 @@ Parameters:
 - a, b: Current polynomials in the sequence.
 - stopDegree: The degree boundary we are aiming to cross.
 */
-func (r *DensePolyRing) fastGCDRec(a, b *Polynomial, stopDegree int) polyMatrix2x2 {
+func (r *PolyRing) fastGCDRec(a, b *Polynomial, stopDegree int) polyMatrix2x2 {
 	// Base Case 1: Target reached.
 	aDeg := a.Degree()
 	if aDeg < stopDegree || b.Degree() < 0 {
-		return polyIdentity2x2(r.Field)
+		return polyIdentity2x2(r.f)
 	}
 
 	// Base Case 2: Small polynomials, use iterative O(n^2) logic.
@@ -1097,7 +1091,7 @@ Procedure:
 The result
 This implements the Schönhage strategy of high-part recursion.
 */
-func (r *DensePolyRing) hgcd(a, b *Polynomial, m int) polyMatrix2x2 {
+func (r *PolyRing) hgcd(a, b *Polynomial, m int) polyMatrix2x2 {
 	n := a.Degree()
 	// Base Case: target reduction reached or degree too small.
 	if b.Degree() < n-m || n < hgcdThreshold {
@@ -1165,10 +1159,10 @@ func (r *DensePolyRing) hgcd(a, b *Polynomial, m int) polyMatrix2x2 {
 iterativePartialExtendedEuclideanMatrix is the O(n^2) fallback.
 It computes the transition matrix M until deg(a) < stopDegree.
 */
-func (r *DensePolyRing) iterativePartialExtendedEuclideanMatrix(a, b *Polynomial, stopDegree int) polyMatrix2x2 {
+func (r *PolyRing) iterativePartialExtendedEuclideanMatrix(a, b *Polynomial, stopDegree int) polyMatrix2x2 {
 	A := a.Copy()
 	B := b.Copy()
-	M := polyIdentity2x2(r.Field)
+	M := polyIdentity2x2(r.f)
 
 	for A.Degree() >= stopDegree && B.Degree() >= 0 {
 		q, rem := r.Div(A, B)
@@ -1181,12 +1175,12 @@ func (r *DensePolyRing) iterativePartialExtendedEuclideanMatrix(a, b *Polynomial
 }
 
 // shiftRight extracts the high coefficients of a polynomial by shifting.
-func (r *DensePolyRing) shiftRight(p *Polynomial, m int) *Polynomial {
+func (r *PolyRing) shiftRight(p *Polynomial, m int) *Polynomial {
 	if m <= 0 {
 		return p.Copy()
 	}
 	if m >= len(p.inner) {
-		return polyZero(r.Field)
+		return polyZero(r.f)
 	}
 	return r.NewPolynomial(p.inner[m:], false)
 }

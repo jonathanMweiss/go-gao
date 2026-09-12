@@ -13,43 +13,43 @@ type twiddleSet struct {
 	nInv uint64 // inverse of n (for inverse NTT scaling)
 }
 
-func (pr *DensePolyRing) getTwiddles(n int) (*twiddleSet, error) {
-	pr.mu.RLock()
-	if ts, ok := pr.twiddleCache[n]; ok {
-		pr.mu.RUnlock()
+func (r *PolyRing) getTwiddles(n int) (*twiddleSet, error) {
+	r.mu.RLock()
+	if ts, ok := r.twiddleCache[n]; ok {
+		r.mu.RUnlock()
 		return ts, nil
 	}
-	pr.mu.RUnlock()
+	r.mu.RUnlock()
 
 	// Build outside lock
 	if n <= 1 {
 		ts := &twiddleSet{
 			fwd:  [][]uint64{},
 			inv:  [][]uint64{},
-			nInv: pr.Inverse(uint64(n)),
+			nInv: r.f.Inverse(uint64(n)),
 		}
 
-		pr.mu.Lock()
-		pr.twiddleCache[n] = ts
-		pr.mu.Unlock()
+		r.mu.Lock()
+		r.twiddleCache[n] = ts
+		r.mu.Unlock()
 
 		return ts, nil
 	}
-	psi, err := pr.GetRootOfUnity(uint64(n))
+	psi, err := RootOfUnity(r.f, uint64(n))
 	if err != nil {
 		return nil, err
 	}
-	psiInv := pr.Inverse(psi)
+	psiInv := r.f.Inverse(psi)
 
 	var fwd [][]uint64
 	var inv [][]uint64
 
-	f := pr.Field
+	f := r.f
 	// stages: m = 2,4,8,...,n  => stage index s = 0..(log2(n)-1)
 	for m := 2; m <= n; m = m << 1 {
 		half := m >> 1
-		wmF := pr.Pow(psi, uint64(n/m))    // forward stage root
-		wmI := pr.Pow(psiInv, uint64(n/m)) // inverse stage root
+		wmF := r.f.Pow(psi, uint64(n/m))    // forward stage root
+		wmI := r.f.Pow(psiInv, uint64(n/m)) // inverse stage root
 
 		rowF := make([]uint64, half)
 		rowI := make([]uint64, half)
@@ -70,23 +70,23 @@ func (pr *DensePolyRing) getTwiddles(n int) (*twiddleSet, error) {
 	ts := &twiddleSet{
 		fwd:  fwd,
 		inv:  inv,
-		nInv: pr.Inverse(uint64(n)),
+		nInv: r.f.Inverse(uint64(n)),
 	}
 
-	pr.mu.Lock()
-	defer pr.mu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	// Another goroutine may have won the race; keep the first one but return ours if we’re first.
-	if existing, ok := pr.twiddleCache[n]; ok {
+	if existing, ok := r.twiddleCache[n]; ok {
 		return existing, nil
 	}
 
-	pr.twiddleCache[n] = ts
+	r.twiddleCache[n] = ts
 
 	return ts, nil
 }
 
 // NttForward transforms a into the NTT domain in place. If polynomial is already in NTT form, no operation is performed.
-func (pr *DensePolyRing) NttForward(a *Polynomial) error {
+func (r *PolyRing) NttForward(a *Polynomial) error {
 	if a == nil || len(a.inner) == 0 {
 		return nil
 	}
@@ -102,12 +102,12 @@ func (pr *DensePolyRing) NttForward(a *Polynomial) error {
 	bitReverseInPlace(a.inner)
 
 	// Twiddles per stage
-	ts, err := pr.getTwiddles(n)
+	ts, err := r.getTwiddles(n)
 	if err != nil {
 		return err
 	}
 
-	f := pr.Field
+	f := r.f
 
 	// Stages: m = 2,4,8,...,n  with precomputed ws per stage.
 	for s, m := 0, 2; m <= n; s, m = s+1, m<<1 {
@@ -132,16 +132,16 @@ func (pr *DensePolyRing) NttForward(a *Polynomial) error {
 // NttBackward transforms a from the NTT domain back to coefficients, in place, and
 // trims trailing zeros. It returns an error if a is not in the NTT domain or its
 // length is not a power of two.
-func (pr *DensePolyRing) NttBackward(a *Polynomial) error {
-	if err := pr.nttBackwardNoTrim(a); err != nil {
+func (r *PolyRing) NttBackward(a *Polynomial) error {
+	if err := r.nttBackwardNoTrim(a); err != nil {
 		return err
 	}
-	pr.trimTrailingZeros(a)
+	r.trimTrailingZeros(a)
 
 	return nil
 }
 
-func (pr *DensePolyRing) nttBackwardNoTrim(a *Polynomial) error {
+func (r *PolyRing) nttBackwardNoTrim(a *Polynomial) error {
 	if a == nil || len(a.inner) == 0 {
 		return nil
 	}
@@ -158,12 +158,12 @@ func (pr *DensePolyRing) nttBackwardNoTrim(a *Polynomial) error {
 	bitReverseInPlace(a.inner)
 
 	// Twiddles per stage
-	ts, err := pr.getTwiddles(n)
+	ts, err := r.getTwiddles(n)
 	if err != nil {
 		return err
 	}
 
-	f := pr.Field
+	f := r.f
 	// Inverse butterflies use inverse stage twiddles
 	for s, m := 0, 2; m <= n; s, m = s+1, m<<1 {
 		half := m >> 1

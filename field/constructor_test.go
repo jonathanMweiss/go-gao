@@ -16,7 +16,7 @@ func TestEmptyCoefficientsYieldZeroPolynomial(t *testing.T) {
 	f, err := NewPrimeField(65537)
 	require.NoError(t, err)
 
-	pr := NewDensePolyRing(f)
+	pr := NewPolyRing(f)
 
 	for name, p := range map[string]*Polynomial{
 		"nil":           pr.NewPolynomial(nil, false),
@@ -35,7 +35,7 @@ func TestIsZero(t *testing.T) {
 	f, err := NewPrimeField(65537)
 	require.NoError(t, err)
 
-	pr := NewDensePolyRing(f)
+	pr := NewPolyRing(f)
 
 	for _, tc := range []struct {
 		name string
@@ -64,7 +64,7 @@ func TestZeroPolynomialIsUsableInRingOps(t *testing.T) {
 	f, err := NewPrimeField(65537)
 	require.NoError(t, err)
 
-	pr := NewDensePolyRing(f)
+	pr := NewPolyRing(f)
 
 	zero := pr.NewPolynomial(nil, false)
 	p := pr.NewPolynomial([]uint64{1, 2, 3}, false)
@@ -90,8 +90,8 @@ func TestZeroPolynomialIsUsableInRingOps(t *testing.T) {
 // lets PolyRing.NewPolynomial construct without any field check at all — the ring is
 // now the only route to a Polynomial, so a valid ring implies a valid field.
 func TestNilFieldPanics(t *testing.T) {
-	assert.PanicsWithValue(t, "NewDensePolyRing: nil field", func() {
-		NewDensePolyRing(nil)
+	assert.PanicsWithValue(t, "NewPolyRing: nil field", func() {
+		NewPolyRing(nil)
 	})
 }
 
@@ -101,7 +101,7 @@ func TestProductEmptyIsOne(t *testing.T) {
 	f, err := NewPrimeField(65537)
 	require.NoError(t, err)
 
-	pr := NewDensePolyRing(f)
+	pr := NewPolyRing(f)
 
 	one := pr.Product(nil)
 	assert.Equal(t, 0, one.Degree())
@@ -121,7 +121,7 @@ func TestProductDoesNotAliasOrMutateInput(t *testing.T) {
 	f, err := NewPrimeField(65537)
 	require.NoError(t, err)
 
-	pr := NewDensePolyRing(f)
+	pr := NewPolyRing(f)
 
 	// Enough factors to build a real tree, and to cross nttMulThreshold on the way up.
 	const factors = 40
@@ -156,7 +156,7 @@ func TestRingNewPolynomialUsesRingField(t *testing.T) {
 	f, err := NewPrimeField(65537)
 	require.NoError(t, err)
 
-	pr := NewDensePolyRing(f)
+	pr := NewPolyRing(f)
 
 	p := pr.NewPolynomial([]uint64{1, 2, 3}, false)
 	assert.Equal(t, f.Modulus(), p.f.Modulus())

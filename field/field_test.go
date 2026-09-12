@@ -10,28 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestRootsOfUnity(t *testing.T) {
-	a := assert.New(t)
-
-	f, err := NewPrimeField(65537)
-	a.NoError(err)
-
-	root, err := f.GetRootOfUnity(4)
-	a.NoError(err)
-	a.Equal(uint64(65281), root)
-
-	root, err = f.GetRootOfUnity(8)
-	a.NoError(err)
-	a.Equal(uint64(4096), root)
-
-	f, err = NewPrimeField(157)
-	a.NoError(err)
-
-	root, err = f.GetRootOfUnity(4)
-	a.NoError(err)
-	a.Equal(uint64(129), root)
-}
-
 func TestCorrectOps(t *testing.T) {
 	a := assert.New(t)
 
@@ -175,17 +153,15 @@ func BenchmarkNeg(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	pf := f.(*PrimeField)
-
 	b.Run("Branched", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			benchNegSink = pf.NegBranched(uint64(i))
+			benchNegSink = f.NegBranched(uint64(i))
 		}
 	})
 
 	b.Run("Branchless", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			benchNegSink = pf.NegBranchless(uint64(i))
+			benchNegSink = f.NegBranchless(uint64(i))
 		}
 	})
 }
@@ -205,14 +181,9 @@ func BenchmarkPowMod(b *testing.B) {
 		}
 	})
 
-	fp, ok := f.(*PrimeField)
-	if !ok {
-		b.FailNow()
-	}
-
 	b.Run("PowBig", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			fp.PowSlow(e1, 1<<62)
+			f.PowSlow(e1, 1<<62)
 		}
 	})
 
@@ -272,7 +243,7 @@ func TestRootsOfUnityGeneration(t *testing.T) {
 
 	for i := range 8 {
 		N := uint64(1 << (i + 1))
-		root, err := f.GetRootOfUnity(N)
+		root, err := RootOfUnity(f, N)
 		a.NoError(err)
 		a.True(isRootOfUnityOfOrderN(f, root, N))
 	}

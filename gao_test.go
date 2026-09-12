@@ -236,7 +236,7 @@ func TestSliceEncodeDecode(t *testing.T) {
 // decodeNTT/decodeGeneric.
 //
 // (a) Decode is correct across the whole tolerated sweep 0..MaxErrors: 0 errors takes
-// the fast path, 1..MaxErrors fall back to FastPartialGCD, and every one recovers the
+// the fast path, 1..MaxErrors fall back to PartialGCD, and every one recovers the
 // original message — so the fast path never misfires within tolerance.
 //
 // (b) sum of codewords is a codeword, thus fires the fast path.

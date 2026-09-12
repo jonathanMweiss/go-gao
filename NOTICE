@@ -13,13 +13,10 @@ Portions of this software were originally developed as part of the Cohort
 project (Copyright 2026 Jonathan Weiss, Apache License 2.0) and extracted
 into this standalone module.
 
-This product depends on third-party software licensed under their own terms:
+The library itself depends on nothing outside the Go standard library. Building
+its tests pulls in third-party software licensed under its own terms:
 
-  - github.com/tuneinsight/lattigo/v6            Apache License 2.0
-  - github.com/ALTree/bigfloat                   MIT
-  - golang.org/x/crypto, golang.org/x/exp        BSD 3-Clause
   - github.com/stretchr/testify                  MIT
-  - github.com/google/go-cmp                     BSD 3-Clause
   - github.com/pmezard/go-difflib                BSD 3-Clause
   - github.com/davecgh/go-spew                   ISC
   - gopkg.in/yaml.v3                             MIT and Apache License 2.0

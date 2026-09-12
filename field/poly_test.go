@@ -31,7 +31,7 @@ func TestPolyAdd(t *testing.T) {
 	f, err := NewPrimeField(157)
 	a.NoError(err)
 
-	pr := NewDensePolyRing(f)
+	pr := NewPolyRing(f)
 	t.Run("NotInPlace", func(t *testing.T) {
 
 		t.Run("sameSize", func(t *testing.T) {
@@ -145,7 +145,7 @@ func TestPolySub(t *testing.T) {
 	f, err := NewPrimeField(157)
 	a.NoError(err)
 
-	pr := NewDensePolyRing(f)
+	pr := NewPolyRing(f)
 
 	t.Run("sameSize", func(t *testing.T) {
 		slice := []uint64{1, 2, 0, 3}
@@ -197,7 +197,7 @@ func TestPolyMul(t *testing.T) {
 	f, err := NewPrimeField(5)
 	a.NoError(err)
 
-	pr := NewDensePolyRing(f)
+	pr := NewPolyRing(f)
 	t.Run("sameSize", func(t *testing.T) {
 		slice := []uint64{1, 2, 3}
 
@@ -240,7 +240,7 @@ func TestPolyDiv(t *testing.T) {
 	f, err := NewPrimeField(5)
 	a.NoError(err)
 
-	pr := NewDensePolyRing(f)
+	pr := NewPolyRing(f)
 	t.Run("simple", func(t *testing.T) {
 		p1 := newPolynomial(f, []uint64{1, 2, 3}, false)
 		p2 := newPolynomial(f, []uint64{1, 2, 3}, false)
@@ -292,7 +292,7 @@ func TestPolyEvaluation(t *testing.T) {
 	f, err := NewPrimeField(5)
 	a.NoError(err)
 
-	pr := NewDensePolyRing(f)
+	pr := NewPolyRing(f)
 	t.Run("simple", func(t *testing.T) {
 		slice := []uint64{1, 2, 3}
 
@@ -330,7 +330,7 @@ func FuzzPEEA(f *testing.F) {
 		f.FailNow()
 	}
 
-	pr := NewDensePolyRing(fld).(*DensePolyRing)
+	pr := NewPolyRing(fld)
 
 	f.Fuzz(func(t *testing.T, randomSeed uint64) {
 		// Create random polynomials.
@@ -343,7 +343,7 @@ func FuzzPEEA(f *testing.F) {
 		for i := 1; i < maxDegree-1; i++ {
 			partialDegree := i
 
-			gcd, x, y := pr.PartialExtendedEuclidean(a, b, partialDegree)
+			gcd, x, y := pr.partialExtendedEuclidean(a, b, partialDegree)
 
 			ax, by, ax_plus_by := &Polynomial{}, &Polynomial{}, &Polynomial{}
 			pr.Mul(a, x, ax)
@@ -401,7 +401,7 @@ func BenchmarkPolyDiv(b *testing.B) {
 	if err != nil {
 		b.FailNow()
 	}
-	pr := NewDensePolyRing(f)
+	pr := NewPolyRing(f)
 
 	p1 := randomPolynomial(f, largePrime/4, 8192)
 	p2 := randomPolynomial(f, largePrime/4, 8192/2)
@@ -419,7 +419,7 @@ func BenchmarkPEEA(b *testing.B) {
 		b.FailNow()
 	}
 
-	pr := NewDensePolyRing(f).(*DensePolyRing)
+	pr := NewPolyRing(f)
 
 	polyMaxDegree := 8193
 	p1 := randomPolynomial(f, largePrime/4, polyMaxDegree)   // Large Polynomial.
@@ -430,7 +430,7 @@ func BenchmarkPEEA(b *testing.B) {
 			partialDegree := 1 << i
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				pr.PartialExtendedEuclidean(p1, p2, partialDegree)
+				pr.partialExtendedEuclidean(p1, p2, partialDegree)
 			}
 		})
 	}
@@ -445,7 +445,7 @@ func BenchmarkPEEA(b *testing.B) {
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				pr.PartialExtendedEuclidean(p1, p2, (n+k)/2) // Gao's decoder partialEEA.
+				pr.partialExtendedEuclidean(p1, p2, (n+k)/2) // Gao's decoder partialEEA.
 			}
 		})
 	}
@@ -497,7 +497,7 @@ func TestLocatorPolynomial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pr := NewDensePolyRing(f)
+	pr := NewPolyRing(f)
 
 	p := polyProductMonicNegRoots(f, roots)
 
@@ -557,7 +557,7 @@ func TestDivNTT(t *testing.T) {
 		p := randomPolynomial(f, 12345, maxDegree)
 		q := randomPolynomial(f, 67890, maxDegree/2)
 
-		pr := NewDensePolyRing(f).(*DensePolyRing)
+		pr := NewPolyRing(f)
 		// Ensuring both methods produce the same quotient and remainder.
 		quo1, rem1 := pr.divSchoolbook(p.Copy(), q.Copy())
 		quo2, rem2 := pr.divViaNTT(p.Copy(), q.Copy())
@@ -576,7 +576,7 @@ func BenchmarkDivs(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	pr := NewDensePolyRing(f).(*DensePolyRing)
+	pr := NewPolyRing(f)
 
 	type cfg struct{ degA, degB int }
 	cases := []cfg{
@@ -646,7 +646,7 @@ func FuzzNttPEEA(f *testing.F) {
 		f.FailNow()
 	}
 
-	pr := NewDensePolyRing(fld).(*DensePolyRing)
+	pr := NewPolyRing(fld)
 
 	f.Fuzz(func(t *testing.T, randomSeed uint64) {
 		// Create random polynomials.
@@ -668,7 +668,7 @@ func FuzzNttPEEA(f *testing.F) {
 		for i := 1; i < maxDegree-1; i = i << 1 {
 			partialDegree := i
 
-			gcd, x, y := pr.NttPartialExtendedEuclidean(a, b, partialDegree)
+			gcd, x, y := pr.nttPartialExtendedEuclidean(a, b, partialDegree)
 
 			ax, by, ax_plus_by := &Polynomial{}, &Polynomial{}, &Polynomial{}
 			pr.Mul(a, x, ax)

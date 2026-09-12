@@ -20,6 +20,9 @@ The polynomial and finite-field arithmetic underneath are exported as a reusable
 [`field`](./field) package: prime fields, dense polynomial rings, NTT, Lagrange
 interpolation, and a half-GCD extended Euclidean algorithm.
 
+**No dependencies.** The library imports nothing outside the Go standard library;
+`testify` is used by the tests only.
+
 > **Status: v0.x.** The API may still change. Pin a version.
 
 ## Installation
@@ -154,8 +157,6 @@ See [`example_test.go`](./example_test.go) and the unit tests for further exampl
 
 ## Planned Improvements
 
-- Remove the Lattigo dependency by implementing primitive-root search directly.
-  It is currently pulled in for a single call.
 - Benchmark numbers in this README, rather than only in `go test -bench`.
 
 ## Explanation about the decoding logic

@@ -14,7 +14,7 @@ import (
 // TestLargeCodeWithFastGCD pins a case that once failed only at scale: with n=16384 and
 // a tenth of the codeword corrupted, the half-GCD path returned an error where the
 // classical one decoded. It is kept as a regression test because nothing smaller
-// reproduces it -- FastPartialGCD only takes its recursive path on large inputs.
+// reproduces it -- PartialGCD only takes its recursive path on large inputs.
 func TestLargeCodeWithFastGCD(t *testing.T) {
 	a := assert.New(t)
 	f, err := field.NewPrimeField(144115188075593729)

@@ -5,13 +5,25 @@ package field
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 	"math/bits"
-
-	"github.com/tuneinsight/lattigo/v6/ring"
 )
 
 // Field is the arithmetic of a finite field, with elements represented as uint64.
+//
+// Every method is an elementary field operation, and nothing here requires knowing the
+// structure of the multiplicative group: a field that can add, multiply and invert is a
+// complete implementation. Whatever else this package needs -- roots of unity above all
+// -- it derives from these operations; see [RootOfUnity].
+//
+// That is deliberate, and the interface is meant to stay this size: implementing it
+// should never come to require more than the arithmetic. Implement it to bring a field
+// faster than [PrimeField], such as one reducing by Montgomery or Barrett rather than by
+// a hardware divide.
+//
+// Implementations must be safe for concurrent use and must return reduced elements in
+// the range [0, Modulus).
 type Field interface {
 	Equals(a, b uint64) bool
 	Add(a, b uint64) uint64
@@ -24,29 +36,26 @@ type Field interface {
 	Reduce(a uint64) uint64
 
 	Modulus() uint64
-	GetRootOfUnity(n uint64) (uint64, error)
-	Generator() uint64
-	Factors() []uint64
 }
 
-// PrimeField implements Field over the integers modulo a prime p < 2^63.
+// PrimeField implements [Field] over the integers modulo a prime p < 2^63, reducing with
+// a hardware divide. It is safe for concurrent use.
 type PrimeField struct {
-	prime     uint64
-	generator uint64
-	factors   []uint64
+	prime uint64
 }
 
 var (
 	errPrimeTooLarge = errors.New("supporting up to 63-bit prime")
-	errNotPrime      = errors.New("this package only support prime fields. please use a prime order")
+	errNotPrime      = errors.New("this package only supports prime fields, so the modulus must be prime")
 )
 
 const maxBitUsage = 63
 
 // NewPrimeField returns the field of integers modulo prime.
 //
-// prime must be prime and below 2^63.
-func NewPrimeField(prime uint64) (Field, error) {
+// prime must be prime and below 2^63. Which sizes of NTT the field admits follows from
+// the largest power of two dividing prime-1; see [RootOfUnity].
+func NewPrimeField(prime uint64) (*PrimeField, error) {
 	if prime > (1 << maxBitUsage) {
 		return nil, errPrimeTooLarge
 	}
@@ -57,17 +66,7 @@ func NewPrimeField(prime uint64) (Field, error) {
 		return nil, errNotPrime
 	}
 
-	// TODO: write my own function to find a primitive root, thus dropping the dependency on lattigo altogether.
-	g, factors, err := ring.PrimitiveRoot(prime, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return &PrimeField{
-		prime:     prime,
-		generator: g,
-		factors:   factors,
-	}, nil
+	return &PrimeField{prime: prime}, nil
 }
 
 var (
@@ -76,15 +75,14 @@ var (
 	errNSTooSmall    = errors.New("n must be >= 2")
 )
 
-// Modulus implements Field.
-func (f *PrimeField) Modulus() uint64 {
-	return f.prime
-}
-
-// GetRootOfUnity returns a primitive n-th root of unity, which exists only when n is
-// a power of two dividing p-1.
-func (f *PrimeField) GetRootOfUnity(n uint64) (uint64, error) {
-	if n == 0 || n == 1 {
+// RootOfUnity returns a primitive n-th root of unity in f: an element of multiplicative
+// order exactly n, which is what an n-point NTT transforms over.
+//
+// n must be a power of two dividing Modulus()-1, and no other n is accepted. So the
+// largest power of two dividing p-1 (not the size of p) is what bounds the transform
+// sizes a field can serve.
+func RootOfUnity(f Field, n uint64) (uint64, error) {
+	if n < 2 {
 		return 0, errNSTooSmall
 	}
 
@@ -92,31 +90,62 @@ func (f *PrimeField) GetRootOfUnity(n uint64) (uint64, error) {
 		return 0, errNotPowerOfTwo
 	}
 
-	if (f.prime-1)%n != 0 {
+	p := f.Modulus()
+	if (p-1)%n != 0 {
 		return 0, errNotDivisible
 	}
 
-	// The nth root of unity is the generator raised to the power of (prime-1)/n
+	// The nth root of unity is the generator raised to the power of (p-1)/n
 	// since g^(x) == 1 (mod p) iff x=p-1, then w=g^((p-1)/n) is not 1, and the following n powers of w != 1 too.
 	// proof is by contradiction to g being the generator of the field.
-	return f.Pow(f.generator, (f.prime-1)/n), nil
+	//
+	// instead, of looking for g, we can use the fact that g is a generator of the field:
+	// put an arbitrary `a` where `g` stood, and see what changes.
+	// Every `a` is g^x for some x, which gives
+	//
+	//	a^((p-1)/n) = (g^x)^((p-1)/n) = w^x
+	//
+	// that is a^((p-1)/n) yields a candidate w^x for the primitive root.
+	// this candidate is a primitive w shifted by x.
+	// thus, we know that w^n = 1. However, we need to certify that w^x is not a lower order root of unity.
+	// we inspect the order of w^x by testing (w^x)^(n/2) == 1. If it is, then the order is below n,
+	// and we reject it. if it is not, the order can only be n: it divides n, and n being a
+	// power of two the orders available are 1, 2, 4, ..., n -- every one of them below n
+	// divides n/2, so any of them would have given 1 here.
+	//
+	// This happens when x is odd:
+	// for x=2y+1 we have
+	//
+	// (w^x)^(n/2) = (w^(2y+1))^(n/2) = (w^n)^y * w^(n/2) = 1^y * w^(n/2) = w^(n/2) != 1
+	//
+	// the last step because w is primitive: no power of w below the n-th is 1.
+	//
+	// we want an `a` such that a=g^x for odd x. Since g is a generator f={g^0, g^1, ..., g^(p-2)},
+	// and half of the elements are g^x for odd x, we can scan through the field until we find one.
+	exp := (p - 1) / n
 
+	// Scanned from 2 rather than sampled, so one field always yields one root.
+	// Two codes built over the same field then agree on their evaluation order.
+	for a := uint64(2); a < p; a++ {
+		w := f.Pow(a, exp)
+		if !f.Equals(f.Pow(w, n/2), 1) {
+			return w, nil
+		}
+	}
+
+	// Unreachable for a prime modulus: half the field passes the test above.
+	return 0, fmt.Errorf("no primitive %d-th root of unity modulo %d", n, p)
+}
+
+// Modulus returns the field prime.
+func (f *PrimeField) Modulus() uint64 {
+	return f.prime
 }
 
 // IsPowerOfTwo reports whether n is a power of two.
 func IsPowerOfTwo(n uint64) bool {
 	// https://graphics.stanford.edu/~seander/bithacks.html#DetermineIfPowerOf2
 	return n != 0 && (n&(n-1)) == 0
-}
-
-// Generator returns a primitive root of the field: F_p^* = {1, g, g^2, ..., g^(p-2)}.
-func (f *PrimeField) Generator() uint64 {
-	return f.generator
-}
-
-// Factors returns the prime factorization of p-1.
-func (f *PrimeField) Factors() []uint64 {
-	return f.factors
 }
 
 // Reduce returns val modulo the field prime.

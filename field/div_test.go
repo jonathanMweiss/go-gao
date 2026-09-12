@@ -12,13 +12,13 @@ import (
 
 // divTestField is large enough that the NTT convolution path inside Div is reachable at
 // every size these tests use.
-func divTestField(t testing.TB) (Field, PolyRing) {
+func divTestField(t testing.TB) (Field, *PolyRing) {
 	t.Helper()
 
 	f, err := NewPrimeField(65537)
 	require.NoError(t, err)
 
-	return f, NewDensePolyRing(f)
+	return f, NewPolyRing(f)
 }
 
 // TestDivDividendWithLowOrderZeros is a regression test.
@@ -51,7 +51,7 @@ func TestDivDividendWithLowOrderZeros(t *testing.T) {
 			q, rem := pr.Div(a, b)
 
 			// a == q*b + rem, and deg(rem) < deg(b).
-			got := polyAdd(pr.(*DensePolyRing), polyMul(pr.(*DensePolyRing), q, b), rem)
+			got := polyAdd(pr, polyMul(pr, q, b), rem)
 			require.Equal(t, a.Degree(), got.Degree(),
 				"lowZeros=%d divisor=%v: q*b+rem must reproduce a", lowZeros, divisor)
 			require.True(t, a.Equals(got),
@@ -86,7 +86,7 @@ func FuzzDiv(fz *testing.F) {
 
 	fz.Fuzz(func(t *testing.T, seed uint64, aLen, bLen, lowZeros uint8) {
 		_, pr := divTestField(t)
-		ring := pr.(*DensePolyRing)
+		ring := pr
 
 		// Keep the sizes bounded: this is about correctness, not throughput.
 		na := int(aLen)%64 + 1

@@ -10,12 +10,12 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestFastPartialGCDLarge(t *testing.T) {
+func TestPartialGCDLarge(t *testing.T) {
 	a := assert.New(t)
 	f, err := NewPrimeField(65537)
 	a.NoError(err)
 
-	pr := NewDensePolyRing(f).(*DensePolyRing)
+	pr := NewPolyRing(f)
 
 	n := 8192
 	k := 4096
@@ -26,24 +26,29 @@ func TestFastPartialGCDLarge(t *testing.T) {
 	p := randomPolynomial(f, 1337, n)
 	q := randomPolynomial(f, 7331, n-1)
 
-	gcd, x, y := pr.FastPartialGCD(p, q, stopDegree)
+	gcd, x, y := pr.PartialGCD(p, q, stopDegree)
 	a.True(bezoutIdentityHolds(pr, p, q, gcd, x, y), "Bézout identity should hold for Fast GCD")
 }
 
-// PartialGCD is like PartialExtendedEuclidean but only returns (gcd, y),
-// skipping computation of the unused x Bézout coefficient for ~2x speedup.
-func (r *DensePolyRing) PartialGCD(a, b *Polynomial, stopDegree int) (gcd, y *Polynomial) {
+// partialGCDRightColumnOnly is like partialExtendedEuclidean but only returns (gcd, y),
+// skipping the x Bezout coefficient for ~2x speedup.
+//
+// That is the pair the decoder actually wants (it discards the rest).
+//
+// So this measures what the shortcut is worth to the iterative algorithm, and is the
+// baseline the "Iterative" arm of BenchmarkGCDScaling runs.
+func (r *PolyRing) partialGCDRightColumnOnly(a, b *Polynomial, stopDegree int) (gcd, y *Polynomial) {
 	A := a.Copy()
 	B := b.Copy()
 	degA := A.Degree()
 	degB := B.Degree()
 
 	// Only track right column: (M01, M11).
-	M01 := polyZero(r.Field)
-	M11 := polyOne(r.Field)
+	M01 := polyZero(r.f)
+	M11 := polyOne(r.f)
 
-	tmp1 := &Polynomial{f: r.Field}
-	tmp2 := &Polynomial{f: r.Field}
+	tmp1 := &Polynomial{f: r.f}
+	tmp2 := &Polynomial{f: r.f}
 
 	for degA >= stopDegree {
 		if degB < 0 {
@@ -68,7 +73,7 @@ func BenchmarkGCDScaling(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	pr := NewDensePolyRing(f).(*DensePolyRing)
+	pr := NewPolyRing(f)
 
 	// Test across a range of degrees to see the crossover point and scaling.
 	degrees := []int{128, 512, 2048, 8192, 16384, 32768, 65536}
@@ -85,7 +90,7 @@ func BenchmarkGCDScaling(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, _ = pr.PartialGCD(p, q, stopDegree)
+				_, _ = pr.partialGCDRightColumnOnly(p, q, stopDegree)
 			}
 		})
 
@@ -93,7 +98,7 @@ func BenchmarkGCDScaling(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, _, _ = pr.FastPartialGCD(p, q, stopDegree)
+				_, _, _ = pr.PartialGCD(p, q, stopDegree)
 			}
 		})
 	}
@@ -103,7 +108,7 @@ func TestHGCDSecondRecursionCoverage(t *testing.T) {
 	a_assert := assert.New(t)
 	f, err := NewPrimeField(65537)
 	a_assert.NoError(err)
-	pr := NewDensePolyRing(f).(*DensePolyRing)
+	pr := NewPolyRing(f)
 
 	// Fibonacci polynomials: F_n = x*F_{n-1} + F_{n-2}
 	n := 300
@@ -124,7 +129,7 @@ func TestHGCDSecondRecursionCoverage(t *testing.T) {
 
 	stopDegree := 50
 
-	gcdFast, xFast, yFast := pr.FastPartialGCD(p, q, stopDegree)
+	gcdFast, xFast, yFast := pr.PartialGCD(p, q, stopDegree)
 
 	// 1. Verify degree condition
 	a_assert.Less(gcdFast.Degree(), stopDegree, "Fast GCD degree should be less than stopDegree")
@@ -143,7 +148,7 @@ func TestHGCDSecondRecursionCoverage(t *testing.T) {
 	a_assert.True(found, "Fast GCD must be a polynomial in the original Fibonacci sequence")
 }
 
-func bezoutIdentityHolds(pr *DensePolyRing, a, b, gcd, x, y *Polynomial) bool {
+func bezoutIdentityHolds(pr *PolyRing, a, b, gcd, x, y *Polynomial) bool {
 	// ax + by should equal gcd
 	ax := polyMul(pr, a, x)
 	by := polyMul(pr, b, y)

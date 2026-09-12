@@ -17,7 +17,7 @@ func TestNTTForward(t *testing.T) {
 	p := newPolynomial(f, []uint64{1, 2, 3, 4, 5, 6, 7, 8}, false)
 	expected := []uint64{36, 3240, 3067, 427, 3325, 2894, 254, 81}
 
-	pr := NewDensePolyRing(f)
+	pr := NewPolyRing(f)
 
 	a.NoError(pr.NttForward(p))
 	a.Equal(expected, p.ToSlice())
@@ -29,7 +29,7 @@ func TestNTTForwardBackward(t *testing.T) {
 	f, err := NewPrimeField(65537)
 	a.NoError(err)
 
-	pr := NewDensePolyRing(f)
+	pr := NewPolyRing(f)
 	for i := range 8 {
 		cappingDegree := 1 << (i + 1)
 
@@ -49,7 +49,7 @@ func TestPolyMult(t *testing.T) {
 	f, err := NewPrimeField(65537)
 	a.NoError(err)
 
-	pr := NewDensePolyRing(f).(*DensePolyRing)
+	pr := NewPolyRing(f)
 
 	for i := 0; i < 8; i++ {
 

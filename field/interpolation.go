@@ -7,11 +7,11 @@ import "errors"
 
 // An Interpolator recovers the polynomial passing through a set of points.
 type Interpolator struct {
-	pr PolyRing
+	pr *PolyRing
 }
 
 // NewInterpolator returns an Interpolator over the given ring.
-func NewInterpolator(pr PolyRing) *Interpolator {
+func NewInterpolator(pr *PolyRing) *Interpolator {
 	return &Interpolator{pr: pr}
 }
 
@@ -60,7 +60,7 @@ func (intr *Interpolator) Interpolate(xs, ys []uint64) (*Polynomial, error) {
 
 	for i, li := range liSlice {
 		pr.MulScalar(&li, ys[i], &li)
-		// li.MulScalarInPlace(intr.pr.Reduce(ys[i]))
+		// li.MulScalarInPlace(intr.pr.f.Reduce(ys[i]))
 	}
 
 	return intr.similarDegreePolySum(liSlice), nil

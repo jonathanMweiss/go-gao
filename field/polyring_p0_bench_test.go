@@ -24,8 +24,8 @@ func randomPolyWithDegree(f Field, degree int, rng *rand.Rand) *Polynomial {
 }
 
 // Baseline copy of old mulTrunc implementation before optimization.
-func oldMulTrunc(r *DensePolyRing, a, b *Polynomial, L int) *Polynomial {
-	out := &Polynomial{f: r.Field, isNTT: false}
+func oldMulTrunc(r *PolyRing, a, b *Polynomial, L int) *Polynomial {
+	out := &Polynomial{f: r.f, isNTT: false}
 	if L <= 0 {
 		return out
 	}
@@ -44,10 +44,10 @@ func oldMulTrunc(r *DensePolyRing, a, b *Polynomial, L int) *Polynomial {
 	convLen := min(L, total)
 	n := nextPow2(total)
 
-	aNTT := &Polynomial{f: r.Field, inner: make([]uint64, n), isNTT: false}
+	aNTT := &Polynomial{f: r.f, inner: make([]uint64, n), isNTT: false}
 	copy(aNTT.inner, a.inner[:la])
 
-	bNTT := &Polynomial{f: r.Field, inner: make([]uint64, n), isNTT: false}
+	bNTT := &Polynomial{f: r.f, inner: make([]uint64, n), isNTT: false}
 	copy(bNTT.inner, b.inner[:lb])
 
 	if err := r.NttForward(aNTT); err != nil {
@@ -67,19 +67,19 @@ func oldMulTrunc(r *DensePolyRing, a, b *Polynomial, L int) *Polynomial {
 	return out
 }
 
-func oldSeriesInverse(r *DensePolyRing, b *Polynomial, k int) *Polynomial {
+func oldSeriesInverse(r *PolyRing, b *Polynomial, k int) *Polynomial {
 	if k <= 0 {
-		return &Polynomial{f: r.Field, isNTT: false}
+		return &Polynomial{f: r.f, isNTT: false}
 	}
-	if len(b.inner) == 0 || r.Equals(b.inner[0], 0) {
+	if len(b.inner) == 0 || r.f.Equals(b.inner[0], 0) {
 		panic("seriesInverse: constant term is zero")
 	}
 
-	b0 := r.Reduce(b.inner[0])
-	t := &Polynomial{f: r.Field, isNTT: false, inner: []uint64{r.Inverse(b0)}}
-	two := r.Reduce(2)
+	b0 := r.f.Reduce(b.inner[0])
+	t := &Polynomial{f: r.f, isNTT: false, inner: []uint64{r.f.Inverse(b0)}}
+	two := r.f.Reduce(2)
 
-	f := r.Field
+	f := r.f
 	for l := 1; l < k; {
 		m := l << 1
 		if m > k {
@@ -104,7 +104,7 @@ func oldSeriesInverse(r *DensePolyRing, b *Polynomial, k int) *Polynomial {
 	return t
 }
 
-func oldDivNTT(r *DensePolyRing, a, b *Polynomial) (q, rem *Polynomial) {
+func oldDivNTT(r *PolyRing, a, b *Polynomial) (q, rem *Polynomial) {
 	if a == nil || b == nil || a.isNTT || b.isNTT {
 		panic("LongDivNTT expects non-nil coefficient-domain polynomials")
 	}
@@ -114,14 +114,14 @@ func oldDivNTT(r *DensePolyRing, a, b *Polynomial) (q, rem *Polynomial) {
 		panic("division by zero polynomial")
 	}
 	if n < m {
-		return &Polynomial{f: r.Field, isNTT: false, inner: []uint64{0}}, a.Copy()
+		return &Polynomial{f: r.f, isNTT: false, inner: []uint64{0}}, a.Copy()
 	}
 
 	k := n - m + 1
 	Astar := r.rev(a, n+1)
 	Bstar := r.rev(b, m+1)
 
-	if len(Bstar.inner) == 0 || r.Equals(Bstar.inner[0], 0) {
+	if len(Bstar.inner) == 0 || r.f.Equals(Bstar.inner[0], 0) {
 		panic("division by polynomial with zero leading coefficient")
 	}
 
@@ -132,25 +132,25 @@ func oldDivNTT(r *DensePolyRing, a, b *Polynomial) (q, rem *Polynomial) {
 	q = r.rev(Qstar, k)
 
 	prod := oldMulTrunc(r, q, b, n+1)
-	rem = &Polynomial{f: r.Field, isNTT: false}
+	rem = &Polynomial{f: r.f, isNTT: false}
 	r.Sub(a, prod, rem)
 	r.trimTrailingZeros(rem)
 
 	return q, rem
 }
 
-func oldNttPartialExtendedEuclidean(r *DensePolyRing, a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial) {
+func oldNttPartialExtendedEuclidean(r *PolyRing, a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial) {
 	A := a.Copy()
 	B := b.Copy()
 	A.isNTT, B.isNTT = false, false
 
-	x0 := makeConstantPoly(r.Field, 1)
-	x1 := makeConstantPoly(r.Field, 0)
-	y0 := makeConstantPoly(r.Field, 0)
-	y1 := makeConstantPoly(r.Field, 1)
+	x0 := makeConstantPoly(r.f, 1)
+	x1 := makeConstantPoly(r.f, 0)
+	y0 := makeConstantPoly(r.f, 0)
+	y1 := makeConstantPoly(r.f, 1)
 
-	tmp1 := &Polynomial{f: r.Field}
-	tmp2 := &Polynomial{f: r.Field}
+	tmp1 := &Polynomial{f: r.f}
+	tmp2 := &Polynomial{f: r.f}
 
 	for A.Degree() >= stopDegree {
 		if B.Degree() < 0 || len(B.inner) == 0 {
@@ -177,17 +177,14 @@ func oldNttPartialExtendedEuclidean(r *DensePolyRing, a, b *Polynomial, stopDegr
 	return A, x0, y0
 }
 
-func benchmarkPolys(tb testing.TB, dividendDegree, divisorDegree int) (*DensePolyRing, *Polynomial, *Polynomial) {
+func benchmarkPolys(tb testing.TB, dividendDegree, divisorDegree int) (*PolyRing, *Polynomial, *Polynomial) {
 	tb.Helper()
 
 	fld, err := NewPrimeField(65537)
 	if err != nil {
 		tb.Fatal(err)
 	}
-	pr, ok := NewDensePolyRing(fld).(*DensePolyRing)
-	if !ok {
-		tb.Fatal("unexpected ring type")
-	}
+	pr := NewPolyRing(fld)
 
 	rng := rand.New(rand.NewSource(1337))
 	a := randomPolyWithDegree(fld, dividendDegree, rng)
@@ -252,7 +249,7 @@ func BenchmarkNttPartialEEALarge_OldVsOptimized(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, _, _ = pr.NttPartialExtendedEuclidean(a, d, tc.stopDegree)
+				_, _, _ = pr.nttPartialExtendedEuclidean(a, d, tc.stopDegree)
 			}
 		})
 	}

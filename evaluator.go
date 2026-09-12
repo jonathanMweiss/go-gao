@@ -48,13 +48,16 @@ var errNonPositiveN = errors.New("codeword length `n` must be positive")
 // quasi-linear, so it is intended for small codes. Prefer nttEvaluator when the
 // field and n permit.
 //
-// A slowEvaluator holds no mutable state and is safe for concurrent use.
+// The ring is the Code's own, shared rather than duplicated; see nttEvaluator.
+//
+// A slowEvaluator adds no mutable state of its own, and the ring it borrows is safe for
+// concurrent use, so an evaluator is too.
 type slowEvaluator struct {
-	pr field.PolyRing
+	pr *field.PolyRing
 }
 
-func newSlowEvaluator(f field.Field) *slowEvaluator {
-	return &slowEvaluator{pr: field.NewDensePolyRing(f)}
+func newSlowEvaluator(pr *field.PolyRing) *slowEvaluator {
+	return &slowEvaluator{pr: pr}
 }
 
 // EvaluationPoints returns the points 1, 2, ..., n used to evaluate a codeword.

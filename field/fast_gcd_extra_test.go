@@ -17,7 +17,7 @@ func TestHGCDSecondRecursivePath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pr := NewDensePolyRing(f).(*DensePolyRing)
+	pr := NewPolyRing(f)
 
 	t.Run("VeryLargeRandom", func(t *testing.T) {
 		// Use a huge N to ensure we hit all recursive branches.
@@ -27,7 +27,7 @@ func TestHGCDSecondRecursivePath(t *testing.T) {
 		p := randomPolynomial(f, 42, n)
 		q := randomPolynomial(f, 24, n-1)
 
-		gcd, x, y := pr.FastPartialGCD(p, q, stopDegree)
+		gcd, x, y := pr.PartialGCD(p, q, stopDegree)
 		assert.True(t, bezoutIdentityHolds(pr, p, q, gcd, x, y), "Bézout identity should hold for Fast GCD")
 	})
 }

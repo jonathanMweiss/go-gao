@@ -11,7 +11,7 @@ import (
 )
 
 // gcdPair builds a random (a, b) with deg(a) = degA and deg(b) = degA-1.
-func gcdPair(pr PolyRing, rng *rand.Rand, degA int) (a, b *Polynomial) {
+func gcdPair(pr *PolyRing, rng *rand.Rand, degA int) (a, b *Polynomial) {
 	coeffs := func(n int) []uint64 {
 		c := make([]uint64, n)
 		for i := range c {
@@ -26,19 +26,19 @@ func gcdPair(pr PolyRing, rng *rand.Rand, degA int) (a, b *Polynomial) {
 	return pr.NewPolynomial(coeffs(degA+1), false), pr.NewPolynomial(coeffs(degA), false)
 }
 
-// TestFastPartialGCDMatchesClassical is a regression test, and the differential check
+// TestPartialGCDMatchesClassical is a regression test, and the differential check
 // that should have existed from the start: the half-GCD is an optimization of the
 // classical algorithm, so the two must return the same gcd and the same Bezout pair for
 // the same stop degree. Nothing else pins that -- each was only ever tested against its
 // own output.
 //
-// FastPartialGCD used to overshoot by exactly one Euclidean step for every input large
+// PartialGCD used to overshoot by exactly one Euclidean step for every input large
 // enough to enter the half-GCD recursion (deg >= hgcdThreshold), because fastGCDRec
 // asked hgcd to reach stopDegree-1 rather than stopDegree. One step too far still
 // decodes while the error count leaves slack, so the decoder only misbehaved at exactly
 // (n-k)/2 errors -- it silently corrected one fewer error than it advertised, at every
 // codeword length from 256 up.
-func TestFastPartialGCDMatchesClassical(t *testing.T) {
+func TestPartialGCDMatchesClassical(t *testing.T) {
 	_, pr := divTestField(t)
 	rng := rand.New(rand.NewSource(7))
 
@@ -47,8 +47,8 @@ func TestFastPartialGCDMatchesClassical(t *testing.T) {
 		a, b := gcdPair(pr, rng, degA)
 
 		for stop := 1; stop < degA; stop += max(1, degA/8) {
-			gFast, xFast, yFast := pr.FastPartialGCD(a, b, stop)
-			gSlow, xSlow, ySlow := pr.PartialExtendedEuclidean(a, b, stop)
+			gFast, xFast, yFast := pr.PartialGCD(a, b, stop)
+			gSlow, xSlow, ySlow := pr.partialExtendedEuclidean(a, b, stop)
 
 			require.True(t, gFast.Equals(gSlow),
 				"degA=%d stop=%d: gcd differs (fast deg %d, classical deg %d)",
@@ -81,8 +81,8 @@ func FuzzGCDAgreement(fz *testing.F) {
 
 		a, b := gcdPair(pr, rand.New(rand.NewSource(int64(seed))), degA)
 
-		gFast, xFast, yFast := pr.FastPartialGCD(a, b, stop)
-		gSlow, xSlow, ySlow := pr.PartialExtendedEuclidean(a, b, stop)
+		gFast, xFast, yFast := pr.PartialGCD(a, b, stop)
+		gSlow, xSlow, ySlow := pr.partialExtendedEuclidean(a, b, stop)
 
 		require.True(t, gFast.Equals(gSlow),
 			"degA=%d stop=%d: gcd differs (fast deg %d, classical deg %d)",

@@ -15,14 +15,12 @@ import (
 //
 // It requires n to be a power of two dividing p-1. NewCode checks this and
 // reports ErrUnsupportedSize rather than letting the evaluator fail later.
-//
-// An nttEvaluator holds no mutable state and is safe for concurrent use.
 type nttEvaluator struct {
-	pr field.PolyRing
+	pr *field.PolyRing // safe for concurrent use.
 }
 
-func newNttEvaluator(f field.Field) *nttEvaluator {
-	return &nttEvaluator{pr: field.NewDensePolyRing(f)}
+func newNttEvaluator(pr *field.PolyRing) *nttEvaluator {
+	return &nttEvaluator{pr: pr}
 }
 
 // supportsSize reports whether the field admits the transforms this strategy needs: an
@@ -44,11 +42,11 @@ func (e *nttEvaluator) supportsSize(n int) error {
 
 	fld := e.pr.GetField()
 
-	if _, err := fld.GetRootOfUnity(uint64(n)); err != nil {
+	if _, err := field.RootOfUnity(fld, uint64(n)); err != nil {
 		return err
 	}
 
-	if _, err := fld.GetRootOfUnity(uint64(2 * n)); err != nil {
+	if _, err := field.RootOfUnity(fld, uint64(2*n)); err != nil {
 		return fmt.Errorf("decoding needs a 2n-point transform, and 2n=%d does not divide p-1=%d: %w",
 			2*n, fld.Modulus()-1, err)
 	}

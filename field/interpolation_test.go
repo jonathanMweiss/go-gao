@@ -16,7 +16,7 @@ func TestMonomialQuickDiv(t *testing.T) {
 	f, err := NewPrimeField(157)
 	a.NoError(err)
 
-	pr := NewDensePolyRing(f)
+	pr := NewPolyRing(f)
 	t.Run("simple", func(t *testing.T) {
 		m1 := newPolynomial(f, []uint64{5, 1}, false)
 		m2 := newPolynomial(f, []uint64{3, 1}, false)
@@ -64,7 +64,7 @@ func TestInterpolation(t *testing.T) {
 	f, err := NewPrimeField(157)
 	a.NoError(err)
 
-	pr := NewDensePolyRing(f)
+	pr := NewPolyRing(f)
 
 	coeffs := []uint64{0, 1, 2}
 	p := newPolynomial(f, coeffs, false)
@@ -90,7 +90,7 @@ func FuzzInterpolation(f *testing.F) {
 		f.FailNow()
 	}
 
-	pr := NewDensePolyRing(fld)
+	pr := NewPolyRing(fld)
 
 	f.Fuzz(func(t *testing.T, randomSeed uint64) {
 		a := assert.New(t)
@@ -111,7 +111,7 @@ func FuzzInterpolation(f *testing.F) {
 
 }
 
-func evalPolyForTest(pr PolyRing, p *Polynomial, randomSeed, numEvals int) ([]uint64, []uint64) {
+func evalPolyForTest(pr *PolyRing, p *Polynomial, randomSeed, numEvals int) ([]uint64, []uint64) {
 	xs := make([]uint64, numEvals)
 	for i := range xs {
 		xs[i] = p.f.Reduce(uint64(randomSeed + i + 1))
@@ -132,7 +132,7 @@ func BenchmarkMDivMi(b *testing.B) {
 	f, err := NewPrimeField(157)
 	a.NoError(err)
 
-	pr := NewDensePolyRing(f)
+	pr := NewPolyRing(f)
 
 	xs := []uint64{1, 2, 3, 5, 6, 7}
 
@@ -161,7 +161,7 @@ func BenchmarkMDivMi(b *testing.B) {
 }
 
 // used to compare the performance of the O(n log^2 n) tree-based product vs the O(n^2) simple product.
-func simplePolyProduct(pr PolyRing, miSlice []*Polynomial) *Polynomial {
+func simplePolyProduct(pr *PolyRing, miSlice []*Polynomial) *Polynomial {
 	m := makeConstantPoly(pr.GetField(), 1)
 	for _, mi := range miSlice {
 		pr.Mul(m, mi, m)
@@ -176,7 +176,7 @@ func BenchmarkPolyProductComparison(b *testing.B) {
 		b.Fatalf("failed to create field: %v", err)
 	}
 
-	pr := NewDensePolyRing(f)
+	pr := NewPolyRing(f)
 	intr := NewInterpolator(pr)
 
 	cases := []int{8, 32, 128, 512, 2048}
