@@ -63,9 +63,6 @@ func NewPrimeField(prime uint64) (Field, error) {
 		return nil, err
 	}
 
-	bgint := &big.Int{}
-	bgint.SetUint64(prime)
-
 	return &PrimeField{
 		prime:     prime,
 		generator: g,

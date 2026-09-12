@@ -572,34 +572,29 @@ func (r *DensePolyRing) PartialExtendedEuclidean(a, b *Polynomial, stopDegree in
 	return A, M.a00, M.a01
 }
 
-// Reverse the top L coefficients: rev_L(f) = x^{L-1} * f(1/x) truncated to L.
-// Uses the *true* degree (last non-zero) rather than len(inner)-1.
-func (r *DensePolyRing) revTop(f *Polynomial, L int) *Polynomial {
+// rev reverses p into a window of exactly L coefficients: out[i] = p[L-1-i], with any
+// index outside p read as zero.
+//
+// L is the caller's, never derived from p's degree, and that is the point. Reversing a
+// whole polynomial means passing deg(p)+1; reversing a truncated series back into a
+// polynomial means passing the length it was truncated to. The two differ exactly when
+// p's top coefficient is zero -- routine for a quotient series -- and an earlier version
+// that found its own anchor by scanning for the degree silently shifted the quotient
+// down by one degree for every low-order zero of the dividend.
+func (r *DensePolyRing) rev(p *Polynomial, L int) *Polynomial {
 	out := &Polynomial{f: r.Field, isNTT: false}
 	if L <= 0 {
 		return out
 	}
+
 	out.inner = make([]uint64, L)
 
-	// Find true degree (ignore trailing zeros)
-	n := len(f.inner) - 1
-	for n >= 0 && r.Equals(f.inner[n], 0) {
-		n--
-	}
-	if n < 0 {
-		// zero polynomial
-		return out
+	for i := range out.inner {
+		if j := L - 1 - i; j < len(p.inner) {
+			out.inner[i] = r.Reduce(p.inner[j])
+		} // else leave as zero
 	}
 
-	// b[i] = a[n - i] if n-i >= 0
-	for i := 0; i < L; i++ {
-		j := n - i
-		if j >= 0 {
-			out.inner[i] = r.Reduce(f.inner[j])
-		} else {
-			out.inner[i] = 0
-		}
-	}
 	return out
 }
 
@@ -788,8 +783,9 @@ func (r *DensePolyRing) divViaNTT(a, b *Polynomial) (q, rem *Polynomial) {
 	if a == nil || b == nil || a.isNTT || b.isNTT {
 		panic("LongDivNTT expects non-nil coefficient-domain polynomials")
 	}
-	n := len(a.inner) - 1
-	m := len(b.inner) - 1
+	// True degrees is needed. (using len() caused a bug before).
+	n := a.Degree()
+	m := b.Degree()
 	if m < 0 {
 		panic("division by zero polynomial")
 	}
@@ -800,9 +796,9 @@ func (r *DensePolyRing) divViaNTT(a, b *Polynomial) (q, rem *Polynomial) {
 
 	k := n - m + 1 // quotient length
 
-	// 1) Reverse tops
-	Astar := r.revTop(a, k)   // length k
-	Bstar := r.revTop(b, m+1) // length m+1
+	// 1) Reverse both inputs whole.
+	Astar := r.rev(a, n+1) // n+1 means full reversal of a.
+	Bstar := r.rev(b, m+1) // m+1 means full reversal of b.
 
 	// lead(b) maps to Bstar[0]; must be invertible
 	if len(Bstar.inner) == 0 || r.Equals(Bstar.inner[0], 0) {
@@ -816,8 +812,11 @@ func (r *DensePolyRing) divViaNTT(a, b *Polynomial) (q, rem *Polynomial) {
 	Qstar := &Polynomial{f: r.Field, isNTT: false}
 	r.mulTruncInto(Qstar, Astar, T, k)
 
-	// 4) q = rev_k(Q*)
-	q = r.revTop(Qstar, k) // coefficient domain
+	// 4) Reverse Q* back into q, over the quotient length k rather than Q*'s own degree.
+	//
+	// In the book's notation this step is rev_{k-1}, not rev_k: its subscript is a degree
+	// bound, whereas k here is a coefficient count, and deg(q) = n-m = k-1.
+	q = r.rev(Qstar, k)
 
 	// 5) rem = a − q*b
 	prod := &Polynomial{f: r.Field, isNTT: false}
@@ -1040,15 +1039,12 @@ func (r *DensePolyRing) fastGCDRec(a, b *Polynomial, stopDegree int) polyMatrix2
 		return r.iterativePartialExtendedEuclideanMatrix(a, b, stopDegree)
 	}
 
-	// Calculate required degree reduction 'm'.
-	// We want to reduce deg(a) until it is < stopDegree.
-	// Distance to target = deg(a) - (stopDegree - 1) = deg(a) - stopDegree + 1.
-	n := aDeg
-	m := n - stopDegree + 1
+	// computes the steps required to reduce the degree of a to stopDegree.
+	steps := aDeg - stopDegree
 
 	// 1. Half-GCD Recursive Step:
 	// Use HGCD to compute a matrix M that reduces degrees significantly.
-	M := r.hgcd(a, b, m)
+	M := r.hgcd(a, b, steps)
 	aCur, bCur := M.MulVec(r, a, b)
 	r.trimTrailingZeros(aCur)
 	r.trimTrailingZeros(bCur)

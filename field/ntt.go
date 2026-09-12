@@ -1,7 +1,6 @@
 // Copyright 2025-2026 Jonathan Weiss
 // SPDX-License-Identifier: Apache-2.0
 
-// improved from recursive variant(+cache of twiddles) using gpt.
 package field
 
 import "errors"

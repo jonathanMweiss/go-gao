@@ -46,19 +46,21 @@ func (p *Polynomial) IsZero() bool {
 	return p.leadingCoeffPos() < 0
 }
 
-// Equals reports whether p and q are the same polynomial. Both must be trimmed of
-// leading zeros; it returns false for polynomials over different fields or domains.
+// Equals reports whether p and q are the same polynomial, regardless of how many
+// high-order zero coefficients either one is padded with. It returns false for
+// polynomials over different fields or in different domains.
 func (p *Polynomial) Equals(q *Polynomial) bool {
 	if err := preOpVerification(p, q); err != nil {
 		return false
 	}
 
-	if len(p.inner) != len(q.inner) {
+	deg := p.Degree()
+	if deg != q.Degree() {
 		return false
 	}
 
 	fld := p.f
-	for i := range p.inner {
+	for i := 0; i <= deg; i++ {
 		if !fld.Equals(p.inner[i], q.inner[i]) {
 			return false
 		}
@@ -120,33 +122,40 @@ func (p *Polynomial) Copy() *Polynomial {
 	return &Polynomial{f: p.f, inner: innercopy, isNTT: p.isNTT}
 }
 
-// todo: fix
-// Used mainly for testing., copies the polynomial.
-func (p_ *Polynomial) String() string {
-	p := p_.Copy()
-	p.removeLeadingZeroes()
+// String renders p in descending degree order, as in "5*x^2 + 3*x^1 + 7". Zero
+// coefficients are omitted, and the zero polynomial renders as "0".
+//
+// It is a debugging and test aid, not a parseable format: p is left untouched, at the
+// cost of copying it.
+func (p *Polynomial) String() string {
+	q := p.Copy()
+	q.removeLeadingZeroes()
 
-	if len(p.inner) == 1 {
-		return strconv.FormatUint(p.inner[0], 10)
+	if len(q.inner) == 1 {
+		return strconv.FormatUint(q.inner[0], 10)
 	}
 
 	bldr := strings.Builder{}
 
-	for i := len(p.inner) - 1; i >= 0; i-- {
-		if p.inner[i] == 0 {
+	for i := len(q.inner) - 1; i >= 0; i-- {
+		if q.inner[i] == 0 {
 			continue
 		}
 
-		strI := strconv.FormatInt(int64(i), 10)
+		if bldr.Len() > 0 {
+			bldr.WriteString(" + ")
+		}
 
-		strElem := strconv.FormatUint(p.inner[i], 10)
-		bldr.WriteString(strElem)
+		bldr.WriteString(strconv.FormatUint(q.inner[i], 10))
 
 		if i != 0 {
 			bldr.WriteString("*x^")
-			bldr.WriteString(strI)
-			bldr.WriteString(" + ")
+			bldr.WriteString(strconv.FormatInt(int64(i), 10))
 		}
+	}
+
+	if bldr.Len() == 0 {
+		return "0"
 	}
 
 	return bldr.String()

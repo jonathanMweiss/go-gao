@@ -118,8 +118,8 @@ func oldDivNTT(r *DensePolyRing, a, b *Polynomial) (q, rem *Polynomial) {
 	}
 
 	k := n - m + 1
-	Astar := r.revTop(a, k)
-	Bstar := r.revTop(b, m+1)
+	Astar := r.rev(a, n+1)
+	Bstar := r.rev(b, m+1)
 
 	if len(Bstar.inner) == 0 || r.Equals(Bstar.inner[0], 0) {
 		panic("division by polynomial with zero leading coefficient")
@@ -127,7 +127,9 @@ func oldDivNTT(r *DensePolyRing, a, b *Polynomial) (q, rem *Polynomial) {
 
 	T := oldSeriesInverse(r, Bstar, k)
 	Qstar := oldMulTrunc(r, Astar, T, k)
-	q = r.revTop(Qstar, k)
+	// Anchored like divViaNTT's, so this benchmarks the old algorithm rather than the
+	// quotient-shift bug both copies of it used to share.
+	q = r.rev(Qstar, k)
 
 	prod := oldMulTrunc(r, q, b, n+1)
 	rem = &Polynomial{f: r.Field, isNTT: false}
