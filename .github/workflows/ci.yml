@@ -34,11 +34,27 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # No -race here: combined with coverage instrumentation, the field package's seed
+      # corpus runs past the default 10m timeout. The step below races the one package
+      # where the detector can actually fire, without coverage.
       - name: Test
-        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+        run: go test -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1
+
+      # Only this package, and only under the detector -- not ./... .
+      #
+      # A *Code is documented as safe to share, and the decoder it shares reaches real
+      # mutable state: the poly ring's twiddle cache and the package-level NTT scratch
+      # pool. TestDecodeIsConcurrencySafe is the test that exercises it, and without
+      # -race it is eight goroutines asserting nothing.
+      #
+      # field/ is excluded because no test there starts a goroutine, so the detector has
+      # nothing to find, and instrumenting its arithmetic costs minutes. Extend this if a
+      # concurrent test is ever added under field/.
+      - name: Test the concurrency contract under the race detector
+        run: go test -race -count=1 .
 
   lint:
     runs-on: ubuntu-latest
@@ -53,7 +69,7 @@ jobs:
       # `unused` here catches dead declarations that `go vet` cannot see: it only
       # reports unused locals and imports, never an unreferenced helper or an
       # exported-but-unreachable method.
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
 
@@ -71,10 +87,13 @@ jobs:
       # This job additionally fuzzes briefly, to catch regressions the seeds miss.
       - name: Fuzz smoke
         run: |
-          for target in FuzzPEEA FuzzNttPEEA FuzzInterpolation FuzzInverse FuzzNegate FuzzSub_Simple; do
+          for target in FuzzPEEA FuzzNttPEEA FuzzInterpolation FuzzInverse FuzzNegate FuzzSub_Simple FuzzDiv FuzzGCDAgreement; do
             echo "== $target"
             go test -run=XXX -fuzz="^${target}$" -fuzztime=30s ./field/
           done
+
+          echo "== FuzzRoundTrip"
+          go test -run=XXX -fuzz='^FuzzRoundTrip$' -fuzztime=60s .
 
   govulncheck:
     runs-on: ubuntu-latest
