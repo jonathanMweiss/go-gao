@@ -296,57 +296,68 @@ func TestOptimisticErrorFreePath(t *testing.T) {
 	}
 }
 
+// BenchmarkDecode measures decoding across both evaluation strategies.
+//
+// The errors dimension is not decoration. With a clean codeword g1 has degree < k and
+// Decode returns on the optimistic path without ever running the partial GCD, so the
+// NTT arm measures an inverse transform and little else -- 9 allocations for the whole
+// call. Only a corrupted codeword exercises the decoder.
+//
+// Pointwise evaluation is quadratic and gets a shorter size list: at n=32768 one
+// error-free decode already runs 45s and allocates 26 GB, which is a number to know
+// rather than one to re-measure on every run.
 func BenchmarkDecode(b *testing.B) {
 	f, err := field.NewPrimeField(65537)
 	if err != nil {
 		b.Fatal(err)
 	}
 
-	ks := []int{1 << 9, 1 << 10, 1 << 12, 1 << 13}
-
 	evaluators := []struct {
 		name string
 		opt  Option
+		ks   []int
 	}{
-		{"pointwise", Pointwise()},
-		{"ntt", RequireNTT()},
+		{"pointwise", Pointwise(), []int{1 << 9, 1 << 10, 1 << 11}},
+		{"ntt", RequireNTT(), []int{1 << 9, 1 << 10, 1 << 12, 1 << 13}},
 	}
 
-	for _, k := range ks {
-		for _, ev := range evaluators {
+	for _, ev := range evaluators {
+		for _, k := range ev.ks {
 			n := k * 4
-			name := fmt.Sprintf("eval=%s/n=%d/k=%d", ev.name, n, k)
-			b.Run(name, func(b *testing.B) {
-				// --- Setup (not timed) ---
 
-				gao, err := NewCode(f, n, k, ev.opt)
-				if err != nil {
-					b.Fatal(err)
-				}
+			for _, errs := range []int{0, max(1, n/100)} {
+				name := fmt.Sprintf("eval=%s/n=%d/k=%d/errors=%d", ev.name, n, k, errs)
 
-				slc := makeTestSlice(k)
-
-				encoding, err := gao.Encode(slc)
-				if err != nil {
-					b.Fatal(err)
-				}
-
-				// If Decode mutates the input slice, uncomment to protect the source:
-				// mkCopy := func(src []Elem) []Elem { dst := make([]Elem, len(src)); copy(dst, src); return dst }
-
-				// Rough throughput metric (bytes per op) if Elem is a byte-like type.
-				// Adjust if your element size differs.
-				b.SetBytes(int64(len(encoding)))
-				b.ReportAllocs()
-				b.ResetTimer()
-
-				for i := 0; i < b.N; i++ {
-					// enc := mkCopy(encoding) // use if Decode modifies input
-					if _, err := gao.Decode(encoding); err != nil {
+				b.Run(name, func(b *testing.B) {
+					// --- Setup (not timed) ---
+					gao, err := NewCode(f, n, k, ev.opt)
+					if err != nil {
 						b.Fatal(err)
 					}
-				}
-			})
+
+					encoding, err := gao.Encode(makeTestSlice(k))
+					if err != nil {
+						b.Fatal(err)
+					}
+
+					if errs > 0 {
+						corruptCodeword(f, rand.New(rand.NewSource(1337)), encoding, errs)
+					}
+
+					// Symbols are uint64, so the codeword is 8 bytes per position.
+					b.SetBytes(int64(len(encoding) * 8))
+					b.ReportAllocs()
+					b.ResetTimer()
+
+					// Decode does not modify its input, so one codeword serves every
+					// iteration.
+					for i := 0; i < b.N; i++ {
+						if _, err := gao.Decode(encoding); err != nil {
+							b.Fatal(err)
+						}
+					}
+				})
+			}
 		}
 	}
 }
@@ -357,7 +368,10 @@ func BenchmarkDecodeOnePercentCorruptionsNTT(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	ks := []int{1 << 12, 1 << 13, 1 << 14, 1 << 15}
+	// n = 2k, and decoding needs a 2n-point transform, so over p=65537 (p-1 = 2^16) the
+	// largest usable k is 2^14: k = 2^15 would ask for a 131072-point transform and
+	// NewCode rejects it.
+	ks := []int{1 << 11, 1 << 12, 1 << 13, 1 << 14}
 	rng := rand.New(rand.NewSource(1337))
 
 	for _, k := range ks {
@@ -385,15 +399,14 @@ func BenchmarkDecodeOnePercentCorruptionsNTT(b *testing.B) {
 
 		name := fmt.Sprintf("n=%d/k=%d/errors=%d(1%%)", n, k, corruptions)
 		b.Run(name, func(b *testing.B) {
-			work := make([]uint64, len(corrupted))
-
 			b.SetBytes(int64(len(corrupted) * 8))
 			b.ReportAllocs()
 			b.ResetTimer()
 
+			// Decode does not modify its input, so the codeword is reused as is rather
+			// than re-copied inside the timed loop.
 			for i := 0; i < b.N; i++ {
-				copy(work, corrupted)
-				if _, err := gao.Decode(work); err != nil {
+				if _, err := gao.Decode(corrupted); err != nil {
 					b.Fatal(err)
 				}
 			}
