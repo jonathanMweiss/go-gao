@@ -650,7 +650,14 @@ func FuzzNttPEEA(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, randomSeed uint64) {
 		// Create random polynomials.
-		maxDegree := 4096
+		//
+		// Keep maxDegree modest: the fuzzing runtime kills a worker whose fuzz
+		// function spends more than 10s on a single input, and the cost here grows
+		// quadratically -- degree 4096 took ~6.6s per seed on a fast laptop and blew
+		// that budget on CI, where four workers share four cores. 1024 still recurses
+		// twice through the half-GCD (hgcdThreshold is 256) and sweeps stop degrees on
+		// both sides of it, at ~0.3s for the worst seed.
+		maxDegree := 1024
 		randomPolynomialDegree := randomSeed % (uint64(maxDegree) - 1)
 		if randomPolynomialDegree == 0 {
 			randomPolynomialDegree = 1
