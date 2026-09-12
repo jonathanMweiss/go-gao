@@ -55,12 +55,15 @@ func TestCorrectOps(t *testing.T) {
 }
 
 func FuzzInverse(f *testing.F) {
-	testcases := []uint64{1, 54347, 4534523, 021310, 1<<63 - 1}
+	const prime = 9191248642791733759
+
+	// 0 and prime both reduce to zero, the one input Inverse refuses.
+	testcases := []uint64{0, 1, 54347, 4534523, 021310, 1<<63 - 1, prime}
 	for _, tc := range testcases {
 		f.Add(tc) // Use f.Add to provide a seed corpus
 	}
 
-	fld, err := NewPrimeField(9191248642791733759)
+	fld, err := NewPrimeField(prime)
 	if err != nil {
 		f.FailNow()
 	}
@@ -68,11 +71,17 @@ func FuzzInverse(f *testing.F) {
 	f.Fuzz(func(t *testing.T, num uint64) {
 
 		e1 := fld.Reduce(num)
-		e2 := fld.Inverse(e1)
 
-		res := fld.Mul(e1, e2)
-		if res != 1 {
-			t.Fatalf("expected 1, got %d", res)
+		// Inverse is documented to panic on zero, and Reduce lands on zero for every
+		// multiple of the prime -- num in {0, prime, 2*prime} all get here. Assert the
+		// documented behaviour instead of tripping over it.
+		if e1 == 0 {
+			assert.Panics(t, func() { fld.Inverse(e1) }, "zero must have no inverse")
+		} else {
+			res := fld.Mul(e1, fld.Inverse(e1))
+			if res != 1 {
+				t.Fatalf("expected 1, got %d", res)
+			}
 		}
 
 		ne1 := fld.Neg(e1)
