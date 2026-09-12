@@ -77,9 +77,10 @@ substantial, so if the fast path is a requirement rather than a preference,
 say so with [RequireNTT] — or check [Code.UsesNTT] afterwards. [Pointwise]
 forces the classical path.
 
-To get the NTT, choose a prime with a large power of two dividing p-1. 65537
-admits any n up to 2^16; 929, the PDF417 field, has p-1 = 2^5 * 29 and so
-reaches only n = 32.
+To get the NTT, choose a prime with a large power of two dividing p-1, and
+size it against 2n: evaluating needs an n-point transform, and decoding
+needs a 2n-point one for the products inside the partial GCD, so the
+strategy requires both.
 
 # Input mutation and concurrency
 

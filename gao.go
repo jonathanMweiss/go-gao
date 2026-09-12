@@ -108,12 +108,18 @@ type config struct {
 	forceSlow  bool
 }
 
-// RequireNTT makes NewCode fail rather than fall back to pointwise evaluation when the
-// field and n cannot support an NTT.
+// RequireNTT makes NewCode fail rather than fall back to pointwise evaluation, which is
+// quadratic in n.
 //
-// Use it whenever the quasi-linear path is a requirement rather than a preference: the
-// default fallback is silent, and pointwise evaluation is quadratic in n, which at large
-// n is the difference between milliseconds and minutes.
+// The NTT strategy needs two transforms from the field, not one: an n-point transform to
+// evaluate a codeword, and a 2n-point transform for the products the decoder's partial
+// GCD takes. So size the prime against 2n -- p=65537, whose p-1 is 2^16, evaluates at up
+// to 65536 points but is only usable up to n=32768.
+//
+// A field short of either falls back silently by default, and at large n pointwise
+// evaluation is the difference between milliseconds and minutes. Use this option
+// whenever the quasi-linear path is a requirement rather than a preference, or check
+// UsesNTT afterwards.
 func RequireNTT() Option {
 	return func(c *config) { c.requireNTT = true }
 }
@@ -127,9 +133,9 @@ func Pointwise() Option {
 // NewCode builds a Reed-Solomon code carrying k data symbols in an n-symbol codeword
 // over the prime field f, decoding with Gao's algorithm.
 //
-// By default it evaluates via the number theoretic transform when f and n allow — which
-// requires n to be a power of two dividing p-1 — and otherwise falls back to pointwise
-// evaluation, which accepts any 0 < n < p but is quadratic in n. Pass RequireNTT to turn
+// By default it evaluates via the number theoretic transform when f and n allow; which
+// requires n to be a power of two dividing p-1. Otherwise it falls back to pointwise
+// evaluation, which accepts any 0 < n < p but has O(n^2) runtime. Pass RequireNTT to turn
 // that fallback into an error, or Pointwise to force the classical path. Check UsesNTT
 // to see which was chosen.
 //
@@ -197,8 +203,8 @@ func selectEvaluator(f field.Field, n int, cfg config) (evaluationMap, error) {
 
 	if cfg.requireNTT {
 		return nil, fmt.Errorf(
-			"%w: n=%d: RequireNTT was set but this field admits no NTT of that length "+
-				"(n must be a power of two dividing p-1, p=%d): %w",
+			"%w: n=%d: RequireNTT was set but this field admits no NTT usable at that length "+
+				"(n and 2n must both be powers of two dividing p-1, p=%d): %w",
 			ErrUnsupportedSize, n, f.Modulus(), nttErr)
 	}
 

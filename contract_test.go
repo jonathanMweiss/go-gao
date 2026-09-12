@@ -50,7 +50,8 @@ func TestNewCodeSelectsStrategy(t *testing.T) {
 	require.NoError(t, err)
 
 	// 929 is the prime field PDF417 barcodes are defined over. p-1 = 928 = 2^5 * 29, so
-	// an NTT exists only up to n=32; n=100 must fall back.
+	// a transform exists only up to 32 points -- and since decoding needs a 2n-point one,
+	// the usable n stops at 16. n=32 and n=100 must both fall back.
 	pdf417, err := field.NewPrimeField(929)
 	require.NoError(t, err)
 
@@ -62,10 +63,11 @@ func TestNewCodeSelectsStrategy(t *testing.T) {
 		wantNTT bool
 	}{
 		{"prefers ntt when possible", f, nil, 16, 4, true},
-		{"ntt at the field's limit", f, nil, 1 << 16, 4, true},
+		{"ntt at the field's limit", f, nil, 1 << 15, 4, true},
 		{"falls back when n is not a power of two", f, nil, 18, 5, false},
 		{"Pointwise overrides an available ntt", f, []Option{Pointwise()}, 16, 4, false},
-		{"GF(929) small enough for ntt", pdf417, nil, 32, 8, true},
+		{"GF(929) small enough for ntt", pdf417, nil, 16, 8, true},
+		{"GF(929) evaluates at 32 but cannot decode there", pdf417, nil, 32, 8, false},
 		{"GF(929) beyond its ntt range", pdf417, nil, 100, 60, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -88,7 +90,8 @@ func TestRequireNTTErrorIsActionable(t *testing.T) {
 	_, err = NewCode(f, 20, 4, RequireNTT())
 	require.Error(t, err)
 
-	assert.Contains(t, err.Error(), "power of two")
+	// The shape requirement and the field, so the reader can tell which to change.
+	assert.Contains(t, err.Error(), "powers of two")
 	assert.Contains(t, err.Error(), "65537")
 }
 
@@ -444,4 +447,56 @@ func TestDecodesAtFullErrorBudget(t *testing.T) {
 			require.Equal(t, data, decoded)
 		})
 	}
+}
+
+// TestRequireNTTRejectsHalfFastFields: a field can admit an n-point transform and not a
+// 2n-point one, which is enough to evaluate quickly and not enough to decode quickly --
+// the partial GCD asks for convolutions of 1.25n, rounding up to 2n. The NTT strategy
+// therefore requires both, and the half-equipped case falls back like any other n it
+// cannot serve.
+//
+// 929 is the cheap witness: p-1 = 928 = 2^5 * 29 evaluates at 32 points and decodes at
+// 16. The same gap exists at p=65537 between n=65536 and n=32768, where exercising it
+// would mean building a pointwise code over 65536 points.
+func TestRequireNTTRejectsHalfFastFields(t *testing.T) {
+	pdf417, err := field.NewPrimeField(929)
+	require.NoError(t, err)
+
+	t.Run("2n available", func(t *testing.T) {
+		code, err := NewCode(pdf417, 16, 8, RequireNTT())
+		require.NoError(t, err, "2n=32 divides p-1=928")
+		assert.True(t, code.UsesNTT())
+	})
+
+	t.Run("only n available", func(t *testing.T) {
+		_, err := NewCode(pdf417, 32, 8, RequireNTT())
+		require.ErrorIs(t, err, ErrUnsupportedSize)
+
+		// The message has to carry the numbers: the reader's next question is which knob
+		// to turn, and seeing 2n against p-1 says it is the prime, not n.
+		assert.Contains(t, err.Error(), "2n-point transform")
+		assert.Contains(t, err.Error(), "2n=64")
+		assert.Contains(t, err.Error(), "p-1=928")
+	})
+
+	t.Run("falls back without the option", func(t *testing.T) {
+		code, err := NewCode(pdf417, 32, 8)
+		require.NoError(t, err)
+		assert.False(t, code.UsesNTT(), "no 2n transform, so not the NTT strategy")
+	})
+
+	// The same ceiling on the prime the README recommends. Asserted through RequireNTT
+	// because that fails inside selectEvaluator, before anything is built: letting it
+	// fall back would construct a pointwise code over 65536 points and cost seconds.
+	t.Run("65537 stops at 32768, not 65536", func(t *testing.T) {
+		f, err := field.NewPrimeField(65537)
+		require.NoError(t, err)
+
+		code, err := NewCode(f, 1<<15, 4, RequireNTT())
+		require.NoError(t, err, "2n=65536 divides p-1")
+		assert.True(t, code.UsesNTT())
+
+		_, err = NewCode(f, 1<<16, 4, RequireNTT())
+		require.ErrorIs(t, err, ErrUnsupportedSize)
+	})
 }

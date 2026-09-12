@@ -25,17 +25,35 @@ func newNttEvaluator(f field.Field) *nttEvaluator {
 	return &nttEvaluator{pr: field.NewDensePolyRing(f)}
 }
 
-// supportsSize reports whether the field admits an NTT of length n, which requires n to
-// be a power of two of at least 2 that divides p-1. NewCode calls this so a
-// bad n surfaces as an error rather than a panic from inside Encode.
+// supportsSize reports whether the field admits the transforms this strategy needs: an
+// n-point one to evaluate with, and a 2n-point one to decode with. Both require a power
+// of two of at least 2 dividing p-1, so in practice the second is the binding one.
+//
+// The 2n is not a margin. The decoder's partial GCD multiplies polynomials of degree up
+// to n, and the longest convolution that asks for measures 1.25n, which rounds up to a
+// 2n-point transform. A field offering only the n-point one evaluates quickly and then
+// multiplies in schoolbook inside a recursion built to avoid it, which measures slower
+// than never taking that recursion at all -- so it does not count as support.
+//
+// NewCode calls this, so an n the strategy cannot serve surfaces as a fallback or an
+// error rather than as a panic from inside Encode.
 func (e *nttEvaluator) supportsSize(n int) error {
 	if n <= 0 {
 		return errNonPositiveN
 	}
 
-	_, err := e.pr.GetField().GetRootOfUnity(uint64(n))
+	fld := e.pr.GetField()
 
-	return err
+	if _, err := fld.GetRootOfUnity(uint64(n)); err != nil {
+		return err
+	}
+
+	if _, err := fld.GetRootOfUnity(uint64(2 * n)); err != nil {
+		return fmt.Errorf("decoding needs a 2n-point transform, and 2n=%d does not divide p-1=%d: %w",
+			2*n, fld.Modulus()-1, err)
+	}
+
+	return nil
 }
 
 // EvaluationPoints returns the n-th roots of unity used as evaluation points.

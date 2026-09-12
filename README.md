@@ -123,9 +123,17 @@ code, err := gao.NewCode(f, n, k, gao.Pointwise())  // force the classical path
 code.UsesNTT()                                      // or just check afterwards
 ```
 
-To get the NTT, pick a prime with a large power of two dividing `p-1`. `65537` works
-for any `n` up to `2^16`. By contrast `929` (the PDF417 field) has
-`p-1 = 928 = 2^5 * 29`, so its NTT reaches only `n = 32`; beyond that it falls back.
+To get the NTT, pick a prime with a large power of two dividing `p-1` — and size it
+against `2n`. Evaluating a codeword needs an `n`-point transform, and decoding
+multiplies polynomials of degree up to `n` inside the partial GCD and needs a `2n`-point
+one, so the NTT strategy requires both.
+
+Since the fallback is silent, say so when you need the fast path:
+
+```go
+_, err := gao.NewCode(f, 65536, 32768, gao.RequireNTT())
+// ErrUnsupportedSize: ... n and 2n must both be powers of two dividing p-1 ...
+```
 
 Invalid parameters are reported at construction — `NewCode` returns
 `ErrUnsupportedSize`, `ErrNSmallerThanK` or `ErrNonPositiveK` rather than failing
