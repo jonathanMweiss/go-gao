@@ -14,7 +14,7 @@ for:
   README is explicit that "the encoder does not know which parts are invalid". This
   decoder repairs both, and a mixture of the two, as long as
   `2*errors + erasures <= n-k`.
-- **It works over prime fields**, not `GF(2^8)`.
+- It works over prime fields.
 
 The polynomial and finite-field arithmetic underneath are exported as a reusable
 [`field`](./field) package: prime fields, dense polynomial rings, NTT, Lagrange
@@ -52,49 +52,57 @@ func main() {
 	code, _ := gao.NewCode(f, n, k)
 
 	data := []uint64{10, 20, 30, 40}
-	codeword, _ := code.EncodeToSlice(data)
+	codeword, _ := code.Encode(data)
 
-	// Corrupt 6 symbols -- the maximum this code can repair.
+	// Corrupt 6 symbols; the maximum this 
+	// specific code can repair.
 	for _, i := range []int{0, 3, 5, 9, 11, 14} {
 		codeword[i] = 12345
 	}
 
-	decoded, _ := code.DecodeFromSlice(codeword)
+	decoded, _ := code.Decode(codeword)
 	fmt.Println(decoded) // [10 20 30 40]
 }
 ```
 
 ### Declaring erasures
 
-Erasures cost half what errors do, so declare the ones you know about.
-With the map form, an erasure is simply an absent key:
-
 ```go
-codeword, _ := code.Encode(data)          // map: point -> value
-xs := code.EvaluationPoints()             // the map's keys, in order
-
-delete(codeword, xs[0])                   // an erasure: costs 1 of the n-k budget
-codeword[xs[1]] = 999                     // an error:   costs 2
-
-decoded, err := code.Decode(codeword)
-```
-
-With the positional form, pass the indices instead. Whatever the slice holds at an
-erased index is ignored, so there is no need to blank those entries first:
-
-```go
-codeword, _ := code.EncodeToSlice(data)
+codeword, _ := code.Encode(data)
 
 codeword[0] = 0                           // value irrelevant; index 0 is declared
 codeword[1] = 999                         // an error: not declared
 
-decoded, err := code.DecodeFromSlice(codeword, 0)
+decoded, err := code.Decode(codeword, 0)  // costs 1 of the n-k budget, vs 2 for the error
+```
+
+Whatever the slice holds at a declared index is ignored, so there is no need to blank
+those entries first.
+
+If you received only some of the symbols — a k-of-n fetch, say — place what you have
+and name the rest:
+
+```go
+ys := make([]uint64, code.N())
+seen := make([]bool, code.N())
+
+for _, sh := range shares {
+	ys[sh.Index], seen[sh.Index] = sh.Value, true
+}
+
+var erased []int
+for i, ok := range seen {
+	if !ok {
+		erased = append(erased, i)
+	}
+}
+
+decoded, err := code.Decode(ys, erased...)
 ```
 
 Past the budget `Decode` usually returns `ErrDecoding`, but it cannot always tell:
 with enough errors a received word can land closer to a *different* valid codeword,
-and you get a confidently wrong message. That is inherent to the code, not to this
-implementation.
+and you get a confidently wrong message. That is inherent to Reed-Solomon codes, not to this implementation.
 
 ### Choosing parameters
 
@@ -110,7 +118,7 @@ pointwise evaluation. **That fallback is silent**, and at large `n` the differen
 substantial, so if the fast path is a requirement rather than a preference, say so:
 
 ```go
-code, err := gao.NewCode(f, n, k, gao.RequireNTT()) // error instead of falling back
+code, err := gao.NewCode(f, n, k, gao.RequireNTT()) // if not enough roots of unity: error instead of falling back
 code, err := gao.NewCode(f, n, k, gao.Pointwise())  // force the classical path
 code.UsesNTT()                                      // or just check afterwards
 ```
@@ -126,7 +134,13 @@ later.
 ### Notes
 
 - A `*Code` is immutable after construction and safe for concurrent use.
-- `Decode` and `DecodeFromSlice` never modify their input.
+- `Decode` never modifies its input.
+- `Decode` returns a message of exactly length `k`, zero-padded when the recovered
+  message has high-order zero symbols. `[]uint64{10, 20, 30, 0}` decodes back to four
+  symbols, not three.
+- Codewords are positional throughout. `EvaluationPoints()` is available for
+  interoperating with another implementation, but neither `Encode` nor `Decode`
+  requires it.
 
 See [`example_test.go`](./example_test.go) and the unit tests for further examples.
 
@@ -134,6 +148,7 @@ See [`example_test.go`](./example_test.go) and the unit tests for further exampl
 
 - Remove the Lattigo dependency by implementing primitive-root search directly.
   It is currently pulled in for a single call.
+- Benchmark numbers in this README, rather than only in `go test -bench`.
 
 ## Explanation about the decoding logic
 GAO used a strong assumption:

@@ -11,7 +11,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestReproductionBenchmarkFailure(t *testing.T) {
+// TestLargeCodeWithFastGCD pins a case that once failed only at scale: with n=16384 and
+// a tenth of the codeword corrupted, the half-GCD path returned an error where the
+// classical one decoded. It is kept as a regression test because nothing smaller
+// reproduces it -- FastPartialGCD only takes its recursive path on large inputs.
+func TestLargeCodeWithFastGCD(t *testing.T) {
 	a := assert.New(t)
 	f, err := field.NewPrimeField(144115188075593729)
 	a.NoError(err)
@@ -27,7 +31,7 @@ func TestReproductionBenchmarkFailure(t *testing.T) {
 		slc[i] = uint64(i + 1)
 	}
 
-	encoded, err := gao.EncodeToSlice(slc)
+	encoded, err := gao.Encode(slc)
 	a.NoError(err)
 
 	corrupted := make([]uint64, len(encoded))
@@ -39,16 +43,13 @@ func TestReproductionBenchmarkFailure(t *testing.T) {
 	}
 	t.Logf("num corruptions %d out of %d", corruptions, n)
 
-	rng := rand.New(rand.NewSource(1337))
-	indices := rng.Perm(n)[:corruptions]
-	for _, idx := range indices {
-		corrupted[idx] = f.Reduce(uint64(rng.Uint32()))
-	}
+	// Fixed seed: this test exists to reproduce one specific failure.
+	corruptCodeword(f, rand.New(rand.NewSource(1337)), corrupted, corruptions)
 
-	// 1. Try decoding with FastPartialGCD (default)
-	decoded, err := gao.DecodeFromSlice(corrupted)
+	decoded, err := gao.Decode(corrupted)
 	if err != nil {
-		t.Fatalf("Reproduction successful: Fast decoding failed but it should have passed.")
+		t.Fatalf("fast decoding failed on %d corruptions out of %d, within the budget of %d: %v",
+			corruptions, n, gao.MaxErrors(), err)
 	}
 
 	a.Equal(slc, decoded)

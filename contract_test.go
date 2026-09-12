@@ -5,7 +5,8 @@ package gao
 
 import (
 	"errors"
-	"maps"
+	"fmt"
+	"math/rand"
 	"slices"
 	"testing"
 
@@ -91,9 +92,10 @@ func TestRequireNTTErrorIsActionable(t *testing.T) {
 	assert.Contains(t, err.Error(), "65537")
 }
 
-// TestDecodeDoesNotMutateInput pins the contract that decoding leaves the caller's data
-// alone. Decode used to write zeros into the map for every erased point, and
-// DecodeFromSlice used to reduce and transform the caller's slice in place.
+// TestDecodeDoesNotMutateInput pins the contract that decoding leaves the caller's
+// codeword alone: Decode used to reduce and transform the slice it was given in place.
+// Both paths through it are covered, since the erasure path rescales every value before
+// interpolating and so has the most to overwrite.
 func TestDecodeDoesNotMutateInput(t *testing.T) {
 	f, err := field.NewPrimeField(65537)
 	require.NoError(t, err)
@@ -107,60 +109,61 @@ func TestDecodeDoesNotMutateInput(t *testing.T) {
 
 		data := makeTestSlice(tc.k)
 
-		t.Run("Decode/map", func(t *testing.T) {
-			encoded, err := code.Encode(data)
+		t.Run("erasure path", func(t *testing.T) {
+			codeword, err := code.Encode(data)
 			require.NoError(t, err)
 
-			// Drop the maximum number of points, so the erasure path runs.
-			xs := code.EvaluationPoints()
-			for i := 0; i < code.N()-code.K(); i++ {
-				delete(encoded, xs[i])
+			// Erase the maximum number of positions, so the rescaling path runs.
+			erased := make([]int, code.N()-code.K())
+			for i := range erased {
+				erased[i] = i
+				codeword[i] = 7777
 			}
 
-			before := maps.Clone(encoded)
+			before := slices.Clone(codeword)
 
-			decoded, err := code.Decode(encoded)
+			decoded, err := code.Decode(codeword, erased...)
 			require.NoError(t, err)
 			assert.Equal(t, data, decoded)
 
-			assert.Equal(t, before, encoded, "Decode must not modify the map it is given")
+			assert.Equal(t, before, codeword, "Decode must not modify the slice it is given")
 		})
 
-		t.Run("DecodeFromSlice", func(t *testing.T) {
-			codeword, err := code.EncodeToSlice(data)
+		t.Run("error path", func(t *testing.T) {
+			codeword, err := code.Encode(data)
 			require.NoError(t, err)
 
 			before := slices.Clone(codeword)
 
-			decoded, err := code.DecodeFromSlice(codeword)
+			decoded, err := code.Decode(codeword)
 			require.NoError(t, err)
 			assert.Equal(t, data, decoded)
 
-			assert.Equal(t, before, codeword, "DecodeFromSlice must not modify the slice it is given")
+			assert.Equal(t, before, codeword, "Decode must not modify the slice it is given")
 		})
 	}
 }
 
-// TestDecodeFromSliceRejectsWrongLength: the positional API cannot express erasures, so
+// TestDecodeRejectsWrongLength: the positional API cannot express erasures, so
 // a short slice is a caller error rather than a set of missing points.
-func TestDecodeFromSliceRejectsWrongLength(t *testing.T) {
+func TestDecodeRejectsWrongLength(t *testing.T) {
 	f, err := field.NewPrimeField(65537)
 	require.NoError(t, err)
 
 	code, err := NewCode(f, 16, 4, RequireNTT())
 	require.NoError(t, err)
 
-	_, err = code.DecodeFromSlice(make([]uint64, 15))
+	_, err = code.Decode(make([]uint64, 15))
 	assert.ErrorIs(t, err, ErrMismatchedLengths)
 
-	_, err = code.DecodeFromSlice(make([]uint64, 17))
+	_, err = code.Decode(make([]uint64, 17))
 	assert.ErrorIs(t, err, ErrMismatchedLengths)
 }
 
-// TestDecodeFromSliceErasures: naming erasures is the whole point of the parameter —
+// TestDecodeErasures: naming erasures is the whole point of the parameter —
 // an erasure costs half an error, so a codeword that is hopeless when its damage is
 // treated as errors decodes cleanly once the positions are declared.
-func TestDecodeFromSliceErasures(t *testing.T) {
+func TestDecodeErasures(t *testing.T) {
 	f, err := field.NewPrimeField(65537)
 	require.NoError(t, err)
 
@@ -171,7 +174,7 @@ func TestDecodeFromSliceErasures(t *testing.T) {
 
 	data := makeTestSlice(k)
 
-	clean, err := code.EncodeToSlice(data)
+	clean, err := code.Encode(data)
 	require.NoError(t, err)
 
 	t.Run("n-k erasures decode", func(t *testing.T) {
@@ -187,14 +190,14 @@ func TestDecodeFromSliceErasures(t *testing.T) {
 		}
 
 		// Declared as erasures: 12 <= n-k, so it decodes.
-		decoded, err := code.DecodeFromSlice(damaged, erased...)
+		decoded, err := code.Decode(damaged, erased...)
 		require.NoError(t, err)
 		assert.Equal(t, data, decoded)
 
 		// Undeclared, the same slice is 12 errors against a budget of 6 — past the
 		// distance bound, so the decoder either reports failure or lands on a
 		// different codeword. What it must not do is return the original message.
-		got, err := code.DecodeFromSlice(damaged)
+		got, err := code.Decode(damaged)
 		if err == nil {
 			assert.NotEqual(t, data, got,
 				"12 undeclared errors are beyond the correction radius")
@@ -210,10 +213,10 @@ func TestDecodeFromSliceErasures(t *testing.T) {
 			garbage[i] = 65536
 		}
 
-		fromZero, err := code.DecodeFromSlice(zeroed, erased...)
+		fromZero, err := code.Decode(zeroed, erased...)
 		require.NoError(t, err)
 
-		fromGarbage, err := code.DecodeFromSlice(garbage, erased...)
+		fromGarbage, err := code.Decode(garbage, erased...)
 		require.NoError(t, err)
 
 		assert.Equal(t, data, fromZero)
@@ -233,39 +236,37 @@ func TestDecodeFromSliceErasures(t *testing.T) {
 			damaged[i] = 222 // undeclared: genuine errors
 		}
 
-		decoded, err := code.DecodeFromSlice(damaged, erased...)
+		decoded, err := code.Decode(damaged, erased...)
 		require.NoError(t, err)
 		assert.Equal(t, data, decoded)
 	})
 
-	t.Run("agrees with the map form", func(t *testing.T) {
-		xs := code.EvaluationPoints()
+	t.Run("an erased position ignores whatever it holds", func(t *testing.T) {
 		erased := []int{2, 5}
 
-		damaged := slices.Clone(clean)
-
-		asMap, err := code.Encode(data)
-		require.NoError(t, err)
+		zeroed := slices.Clone(clean)
+		garbage := slices.Clone(clean)
 
 		for _, i := range erased {
-			damaged[i] = 7777
-			delete(asMap, xs[i])
+			zeroed[i] = 0
+			garbage[i] = 7777
 		}
 
-		fromSlice, err := code.DecodeFromSlice(damaged, erased...)
+		fromZeroed, err := code.Decode(zeroed, erased...)
 		require.NoError(t, err)
 
-		fromMap, err := code.Decode(asMap)
+		fromGarbage, err := code.Decode(garbage, erased...)
 		require.NoError(t, err)
 
-		assert.Equal(t, fromMap, fromSlice)
+		assert.Equal(t, fromZeroed, fromGarbage)
+		assert.Equal(t, data, fromGarbage)
 	})
 }
 
-// TestDecodeFromSliceRejectsBadErasures: these indices come straight from the caller,
+// TestDecodeRejectsBadErasures: these indices come straight from the caller,
 // unlike the map form where absent keys are well-formed by construction. A duplicate
 // would give the erasure locator a repeated root and corrupt the decode silently.
-func TestDecodeFromSliceRejectsBadErasures(t *testing.T) {
+func TestDecodeRejectsBadErasures(t *testing.T) {
 	f, err := field.NewPrimeField(65537)
 	require.NoError(t, err)
 
@@ -294,7 +295,7 @@ func TestDecodeFromSliceRejectsBadErasures(t *testing.T) {
 		{"too many, but all duplicates", make([]int, n-k+1), ErrDuplicateErasure},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := code.DecodeFromSlice(ys, tc.erased...)
+			_, err := code.Decode(ys, tc.erased...)
 			assert.ErrorIs(t, err, tc.want)
 		})
 	}
@@ -336,9 +337,9 @@ func TestEvaluationPointsReturnsCopy(t *testing.T) {
 
 			// And the code still works after that mutation attempt.
 			data := makeTestSlice(code.K())
-			enc, err := code.EncodeToSlice(data)
+			enc, err := code.Encode(data)
 			require.NoError(t, err)
-			dec, err := code.DecodeFromSlice(enc)
+			dec, err := code.Decode(enc)
 			require.NoError(t, err)
 			assert.Equal(t, data, dec)
 		})
@@ -357,7 +358,7 @@ func TestDecodeIsConcurrencySafe(t *testing.T) {
 
 	data := makeTestSlice(code.K())
 
-	codeword, err := code.EncodeToSlice(data)
+	codeword, err := code.Encode(data)
 	require.NoError(t, err)
 
 	// Corrupt up to the correction budget so every goroutine runs the full GCD path.
@@ -373,7 +374,7 @@ func TestDecodeIsConcurrencySafe(t *testing.T) {
 	for range goroutines {
 		go func() {
 			for range 20 {
-				decoded, err := code.DecodeFromSlice(corrupted)
+				decoded, err := code.Decode(corrupted)
 				if err != nil {
 					errs <- err
 
@@ -393,5 +394,54 @@ func TestDecodeIsConcurrencySafe(t *testing.T) {
 
 	for range goroutines {
 		assert.NoError(t, <-errs)
+	}
+}
+
+// TestDecodesAtFullErrorBudget: MaxErrors is a promise, and the interesting point is the
+// boundary itself -- one corruption fewer exercises a different, slacker path through
+// the partial GCD.
+//
+// It sweeps past hgcdThreshold (256 in the field package) deliberately. Below it the
+// half-GCD falls back to the classical algorithm; above it the recursion runs, and a
+// one-step overshoot there used to cost exactly one error of capability at every size
+// from 256 up, while every test that stayed under the budget kept passing.
+func TestDecodesAtFullErrorBudget(t *testing.T) {
+	f, err := field.NewPrimeField(65537)
+	require.NoError(t, err)
+
+	for _, n := range []int{16, 64, 128, 256, 512, 1024, 2048} {
+		k := n / 2
+
+		code, err := NewCode(f, n, k, RequireNTT())
+		require.NoError(t, err)
+
+		data := makeTestSlice(k)
+		rng := rand.New(rand.NewSource(int64(n)))
+
+		t.Run(fmt.Sprintf("errors/n=%d", n), func(t *testing.T) {
+			codeword, err := code.Encode(data)
+			require.NoError(t, err)
+
+			corruptCodeword(f, rng, codeword, code.MaxErrors())
+
+			decoded, err := code.Decode(codeword)
+			require.NoError(t, err, "must correct exactly MaxErrors=%d corruptions", code.MaxErrors())
+			require.Equal(t, data, decoded)
+		})
+
+		// The mixed budget 2*errors+erasures = n-k, spent at its other corner.
+		t.Run(fmt.Sprintf("mixed/n=%d", n), func(t *testing.T) {
+			codeword, err := code.Encode(data)
+			require.NoError(t, err)
+
+			erasures := (n - k) / 2
+			errs := (n - k - erasures) / 2
+
+			erasedAt := damageCodeword(f, rng, codeword, errs, erasures)
+
+			decoded, err := code.Decode(codeword, erasedAt...)
+			require.NoError(t, err, "must handle %d errors + %d erasures", errs, erasures)
+			require.Equal(t, data, decoded)
+		})
 	}
 }

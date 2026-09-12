@@ -62,9 +62,12 @@ func (gao *Code) UsesNTT() bool {
 	return gao.eval.isNTT()
 }
 
-// EvaluationPoints returns the n points a codeword is evaluated at, in the order
-// EncodeToSlice and DecodeFromSlice use. These are the keys of the map Encode returns,
-// so they are what a caller needs to assemble the map for Decode.
+// EvaluationPoints returns the n points a codeword is evaluated at, in the order Encode
+// emits them and Decode expects them.
+//
+// Callers do not need this to encode or decode -- both APIs are positional. It is here
+// for interoperating with another Reed-Solomon implementation, and for understanding
+// what a code is doing.
 //
 // The returned slice is a copy and may be modified freely.
 func (gao *Code) EvaluationPoints() []uint64 {
@@ -88,9 +91,8 @@ var (
 	ErrDataElementsTooLarge = errors.New("data elements too large")
 
 	// Decoding.
-	ErrTooManyPoints        = errors.New("too many evaluated points")
 	ErrTooManyMissingPoints = errors.New("too many missing points")
-	ErrMismatchedLengths    = errors.New("mismatched lengths of xs and ys")
+	ErrMismatchedLengths    = errors.New("codeword length does not match the code's n")
 	ErrErasureOutOfRange    = errors.New("erasure index out of range")
 	ErrDuplicateErasure     = errors.New("duplicate erasure index")
 	// ErrDecoding means no message is consistent with the points given, so the error
@@ -207,65 +209,53 @@ func selectEvaluator(f field.Field, n int, cfg config) (evaluationMap, error) {
 	return slow, nil
 }
 
-// Encode encodes up to k data symbols into a map from evaluation point to value.
-//
-// The map form is what makes erasures expressible: to decode after losing symbols,
-// delete those entries and hand the rest to Decode.
-func (gao *Code) Encode(data []uint64) (map[uint64]uint64, error) {
-	ys, err := gao.EncodeToSlice(data)
-	if err != nil {
-		return nil, err
-	}
-
-	// create map of points.
-	xs := gao.xs
-	points := make(map[uint64]uint64, gao.N())
-
-	for i, y := range ys {
-		points[xs[i]] = y
-	}
-
-	return points, nil
-}
-
-// Decode recovers the original message from received evaluation points, repairing both
+// Decode recovers the original message from a received codeword, repairing both
 // corrupted values and missing ones.
 //
-// Points omitted from the input map `received` are treated as erasures, whose positions are therefore
-// known.
-// Since this is a Reed-Solomon code, the amount of errors and
-// erasures must satisfy $2*errors + erasures <= n-k$; beyond that, correction
-// is not guaranteed: Decode
+// ys holds one value per evaluation point, in the order EvaluationPoints returns them.
+// erasedAt lists the indices of positions known to be unusable; whatever ys holds at an
+// erased index is ignored, so there is no need to blank those entries first.
 //
-// returns ErrDecoding if it detects an inconsistency, but with enough errors a codeword
-// can be pushed closer to a different valid codeword, in which case it returns a
-// confidently wrong message.
+// An erasure is cheaper than an error precisely because its position is known: decoding
+// succeeds while 2*errors+erasures <= n-k.
 //
-// It returns ErrTooManyPoints if received holds more than n entries,
-// ErrTooManyMissingPoints if more than n-k are absent, and ErrDecoding if no message is
-// consistent with the points given.
-func (gao *Code) Decode(received map[uint64]uint64) ([]uint64, error) {
-	xs, ys, erased, err := gao.prepareDecoding(received)
-	if err != nil {
-		return nil, err
-	}
-
-	return gao.sliceDecode(xs, ys, erased)
-}
-
-func (gao *Code) sliceDecode(xs []uint64, ys []uint64, erased []int) ([]uint64, error) {
-	if len(xs) != len(ys) {
+// Beyond that budget correction is not guaranteed. Decode returns ErrDecoding when it
+// detects an inconsistency, but with enough errors a received word can be pushed closer
+// to a different valid codeword, and then it returns a confidently wrong message. That
+// is inherent to Reed-Solomon codes, not to this implementation.
+//
+// ys is not modified, and the returned message always has length k, zero-padded if the
+// message it recovers has high-order zero symbols.
+//
+// It returns ErrMismatchedLengths if ys is not n long, ErrErasureOutOfRange or
+// ErrDuplicateErasure for a malformed erasedAt, ErrTooManyMissingPoints if more than n-k
+// positions are erased, and ErrDecoding if no message is consistent with what it was
+// given.
+func (gao *Code) Decode(ys []uint64, erasedAt ...int) ([]uint64, error) {
+	if len(ys) != gao.N() {
 		return nil, ErrMismatchedLengths
 	}
 
-	gao.reduceSlice(ys)
+	erased, err := gao.checkErasures(erasedAt)
+	if err != nil {
+		return nil, err
+	}
 
-	var err error
+	// The decode reduces and transforms its values in place, so it works on a copy.
+	work := slices.Clone(ys)
+	gao.reduceSlice(work)
+
+	// The all-zero message is degenerate for Gao's algorithm and has to be settled here,
+	// before the partial GCD ever sees it. See zeroCodewordIsNearest.
+	if gao.zeroCodewordIsNearest(work, erased) {
+		return make([]uint64, gao.K()), nil
+	}
+
 	var f, r *field.Polynomial
 	if gao.eval.isNTT() {
-		f, r, err = gao.decodeNTT(ys, xs, erased)
+		f, r, err = gao.decodeNTT(work, gao.xs, erased)
 	} else {
-		f, r, err = gao.decodeGeneric(ys, xs, erased)
+		f, r, err = gao.decodeGeneric(work, gao.xs, erased)
 	}
 
 	if err != nil {
@@ -276,7 +266,49 @@ func (gao *Code) sliceDecode(xs []uint64, ys []uint64, erased []int) ([]uint64, 
 		return nil, ErrDecoding
 	}
 
-	return f.ToSlice(), nil
+	return gao.messageOf(f), nil
+}
+
+// messageOf returns f's coefficients at exactly length k.
+//
+// f.ToSlice() stops at f's degree, so a message whose high-order symbols are zero --
+// [10, 20, 30, 0] -- would otherwise come back shorter than it went in, and a caller
+// comparing what it encoded against what it decoded would see a spurious mismatch.
+// Callers have already checked deg(f) < k, so nothing is truncated here.
+func (gao *Code) messageOf(f *field.Polynomial) []uint64 {
+	msg := make([]uint64, gao.K())
+	copy(msg, f.ToSlice())
+
+	return msg
+}
+
+// zeroCodewordIsNearest reports whether the all-zero codeword is the one nearest to ys,
+// which is to say whether ys decodes to the all-zero message.
+//
+// the zero message is f(x) = 0, zero evaluated anywhere is zero, so it
+// encodes to n zeros and the distance to it is free to measure.
+//
+// It is worth the O(n) scan because f = 0 cannot go through the partial GCD at all. The
+// Berlekamp-Welch product Q = E*f is then identically zero, carrying no degree for the
+// GCD to stop at.
+func (gao *Code) zeroCodewordIsNearest(ys []uint64, erased []int) bool {
+	isErased := make([]bool, len(ys))
+	for _, idx := range erased {
+		isErased[idx] = true
+	}
+
+	// Distance from ys to the all-zero codeword: a non-erased position holding anything
+	// other than zero is one symbol of disagreement.
+	distance := 0
+
+	for i, y := range ys {
+		if !isErased[i] && y != 0 {
+			distance++
+		}
+	}
+
+	// The ordinary Reed-Solomon condition, with that distance standing in for the errors.
+	return 2*distance+len(erased) <= gao.N()-gao.K()
 }
 
 func (gao *Code) reduceSlice(ys []uint64) {
@@ -284,40 +316,6 @@ func (gao *Code) reduceSlice(ys []uint64) {
 	for i := range ys {
 		ys[i] = fld.Reduce(ys[i])
 	}
-}
-
-/*
-prepare the decoding process by filling in missing evaluated points with zeros.
-*/
-func (gao *Code) prepareDecoding(toDecode map[uint64]uint64) ([]uint64, []uint64, []int, error) {
-	if len(toDecode) > gao.N() {
-		return nil, nil, nil, ErrTooManyPoints
-	}
-
-	erasedIndices := make([]int, 0)
-
-	xs := gao.xs
-	ys := make([]uint64, gao.N())
-
-	// ys follows the order of the evaluationMap's evaluation points. A point absent from
-	// toDecode is an erasure: it stays zero here, which the decoder is free to do because
-	// the erasure locator annihilates whatever value sits at an erased position.
-	for i, x := range xs {
-		y, ok := toDecode[x]
-		if !ok {
-			erasedIndices = append(erasedIndices, i)
-
-			continue
-		}
-
-		ys[i] = y
-	}
-
-	if len(erasedIndices) > gao.N()-gao.K() {
-		return nil, nil, nil, ErrTooManyMissingPoints
-	}
-
-	return xs, ys, erasedIndices, nil
 }
 
 // full intuitive explanation in README.md
@@ -354,24 +352,7 @@ func (gao *Code) decodeGeneric(ys []uint64, xs []uint64, erased []int) (*field.P
 		return f, r, nil
 	}
 
-	pr := gao.pr
-
-	g, _, v := pr.FastPartialGCD(gao.g0, g1, stopDegree)
-
-	if len(erased) > 0 {
-		// after FastPartialGCD, g = S*v*f. We remove v, then S.
-		G, remG := pr.Div(g, v)
-		if !remG.IsZero() {
-			return nil, nil, ErrDecoding
-		}
-		// remove S:
-		f, remF := pr.Div(G, S)
-		return f, remF, nil
-	}
-
-	f, r := pr.Div(g, v)
-
-	return f, r, nil
+	return gao.recoverMessage(g1, S, stopDegree)
 }
 
 func (gao *Code) decodeNTT(ys, xs []uint64, erased []int) (*field.Polynomial, *field.Polynomial, error) {
@@ -415,31 +396,44 @@ func (gao *Code) decodeNTT(ys, xs []uint64, erased []int) (*field.Polynomial, *f
 		return f, r, nil
 	}
 
+	return gao.recoverMessage(g1, S, stopDegree)
+}
+
+// recoverMessage runs the partial GCD and strips the locators from what it returns.
+func (gao *Code) recoverMessage(g1, S *field.Polynomial, stopDegree int) (f, rem *field.Polynomial, err error) {
 	pr := gao.pr
 
 	g, _, v := pr.FastPartialGCD(gao.g0, g1, stopDegree)
 
-	if len(erased) > 0 {
-		// after FastPartialGCD, g = S*v*f. We remove v, then S.
-		G, remG := pr.Div(g, v)
-		if !remG.IsZero() {
-			return nil, nil, ErrDecoding
-		}
-		// remove S:
-		f, remF := pr.Div(G, S)
-		return f, remF, nil
+	// A zero error locator would make the divisions below panic. zeroCodewordIsNearest has
+	// already answered the one input that produces one -- an all-zero received word --
+	// so reaching this means the received word admits no consistent message.
+	if v.IsZero() {
+		return nil, nil, ErrDecoding
 	}
 
-	f, r := pr.Div(g, v)
+	if S == nil {
+		f, rem = pr.Div(g, v)
 
-	return f, r, nil
+		return f, rem, nil
+	}
+
+	G, remG := pr.Div(g, v)
+	if !remG.IsZero() {
+		return nil, nil, ErrDecoding
+	}
+
+	f, rem = pr.Div(G, S)
+
+	return f, rem, nil
 }
 
 // codewordMessage returns the optimistic error-free decode result for g1 — the
 // inverse-NTT / interpolant of the received points — when deg(g1) < K. `received` is
 // then exactly a codeword and g1 is its message. The returned pair mirrors the normal
-// FastPartialGCD path: the message trimmed to its degree and a zero remainder, so sliceDecode's guard and the
-// callers see identical output. deg(g1) < 0 is the all-zero message.
+//
+// The deg(g1) < 0 branch is defensive: an all-zero g1 means an all-zero received word,
+// which zeroCodewordIsNearest has already answered.
 func (gao *Code) codewordMessage(g1 *field.Polynomial) (f, r *field.Polynomial) {
 	coeffs := []uint64{0}
 	if deg := g1.Degree(); deg >= 0 {
@@ -470,8 +464,14 @@ func (gao *Code) createErasureLocator(erasedIndices []int, xs []uint64) *field.P
 	return gao.pr.Product(polys)
 }
 
-// EncodeToSlice is the positional form of Encode, returning the n values in specific order (do not shuffle).
-func (gao *Code) EncodeToSlice(data []uint64) ([]uint64, error) {
+// Encode encodes up to k data symbols into an n-symbol codeword.
+//
+// The returned values are positional: index i is the evaluation at EvaluationPoints()[i],
+// and Decode expects them in that order. Fewer than k symbols are zero-padded.
+//
+// It returns ErrDataTooLarge if data holds more than k symbols, and
+// ErrDataElementsTooLarge if any symbol is not less than the field modulus.
+func (gao *Code) Encode(data []uint64) ([]uint64, error) {
 	f := gao.PrimeField()
 
 	q := f.Modulus()
@@ -500,26 +500,6 @@ func (gao *Code) EncodeToSlice(data []uint64) ([]uint64, error) {
 	}
 
 	return ys, nil
-}
-
-// DecodeFromSlice is the positional form of Decode: ys holds one value per evaluation
-// point, in the order EvaluationPoints returns them.
-//
-// erasedAt lists the indices of positions known to be unusable.
-func (gao *Code) DecodeFromSlice(ys []uint64, erasedAt ...int) ([]uint64, error) {
-	if len(ys) != gao.N() {
-		return nil, ErrMismatchedLengths
-	}
-
-	erased, err := gao.checkErasures(erasedAt)
-	if err != nil {
-		return nil, err
-	}
-
-	// sliceDecode reduces and transforms ys in place, so hand it a copy.
-	work := slices.Clone(ys)
-
-	return gao.sliceDecode(gao.xs, work, erased)
 }
 
 // checkErasures validates caller-supplied erasure indices.

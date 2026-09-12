@@ -6,6 +6,7 @@ package gao
 import (
 	"fmt"
 	"math/rand"
+	"slices"
 	"testing"
 	"time"
 
@@ -28,12 +29,49 @@ func makeTestSlice(k int) []uint64 {
 	return poly
 }
 
+// testRNG returns a randomly seeded generator, logging the seed so a failure can be
+// replayed.
+func testRNG(t *testing.T) *rand.Rand {
+	seed := time.Now().UnixNano()
+	t.Logf("random seed: %d", seed)
+
+	return rand.New(rand.NewSource(seed))
+}
+
+// damageCodeword damages a clean codeword in place: it corrupts errs positions and
+// declares erasures more, drawn from one permutation so that the two never overlap and
+// the cost against the n-k budget really is 2*errs+erasures. It returns the erasure
+// indices, ready to hand to Decode.
+//
+// Garbage is written at the erased positions too, which is what makes a passing decode
+// evidence that a declared position's value is ignored rather than merely tolerated.
+//
+// errs+erasures must not exceed len(codeword).
+func damageCodeword(f field.Field, rng *rand.Rand, codeword []uint64, errs, erasures int) []int {
+	positions := rng.Perm(len(codeword))
+
+	for _, idx := range positions[:errs+erasures] {
+		codeword[idx] = differentElement(f, rng, codeword[idx])
+	}
+
+	// the positions of all the erasures are returned.
+	return positions[errs : errs+erasures]
+}
+
+// differentElement returns a random field element that is not old.
+// ensuring that the old value is replaced with a different one.
+func differentElement(f field.Field, rng *rand.Rand, old uint64) uint64 {
+	for {
+		if v := f.Reduce(rng.Uint64()); v != old {
+			return v
+		}
+	}
+}
+
 // corruptCodeword overwrites count distinct, randomly chosen positions of an encoded
 // codeword with random field elements (count must be <= len(codeword)).
 func corruptCodeword(f field.Field, rng *rand.Rand, codeword []uint64, count int) {
-	for _, idx := range rng.Perm(len(codeword))[:count] {
-		codeword[idx] = f.Reduce(rng.Uint64())
-	}
+	damageCodeword(f, rng, codeword, count, 0)
 }
 
 func TestNoCorruptions(t *testing.T) {
@@ -81,15 +119,9 @@ func TestErasures(t *testing.T) {
 		a.NoError(err)
 
 		// add erasures. We should be able to handle up to n-k erasures.
-		numErasures := gao.N() - gao.K()
-		shuffledXs := shuffle(t, gao.EvaluationPoints())
-		for i := 0; i < numErasures; i++ {
-			delete(encoded, shuffledXs[i])
-		}
+		erased := damageCodeword(f, testRNG(t), encoded, 0, gao.N()-gao.K())
 
-		a.Equal(gao.K(), len(encoded))
-
-		decoded, err := gao.Decode(encoded)
+		decoded, err := gao.Decode(encoded, erased...)
 		a.NoError(err)
 
 		a.Equal(makeTestSlice(tc.k), decoded)
@@ -114,45 +146,18 @@ func TestMixedErasuresAndCorruptions(t *testing.T) {
 		encoded, err := gao.Encode(originalData)
 		a.NoError(err)
 
-		xs := gao.EvaluationPoints()
-		shuffledXs := shuffle(t, xs)
-
 		numErasures := 4
 		if tc.n == 18 {
 			numErasures = 5
 		}
 		numCorruptions := 4
 
-		// Add erasures
-		for i := 0; i < numErasures; i++ {
-			delete(encoded, shuffledXs[i])
-		}
+		erased := damageCodeword(f, testRNG(t), encoded, numCorruptions, numErasures)
 
-		// Add corruptions
-		for i := numErasures; i < numErasures+numCorruptions; i++ {
-			encoded[shuffledXs[i]] = rand.Uint64()
-		}
-
-		decoded, err := gao.Decode(encoded)
+		decoded, err := gao.Decode(encoded, erased...)
 		a.NoError(err)
 		a.Equal(originalData, decoded)
 	}
-}
-
-func shuffle(t *testing.T, slc []uint64) []uint64 {
-	seed := time.Now().UnixNano()
-	t.Logf("Shuffling with seed: %d", seed)
-
-	rnd := rand.New(rand.NewSource(seed))
-
-	cpy := make([]uint64, len(slc))
-	copy(cpy, slc)
-
-	rnd.Shuffle(len(slc), func(i, j int) {
-		cpy[i], cpy[j] = cpy[j], cpy[i]
-	})
-
-	return cpy
 }
 
 func TestCorruptions(t *testing.T) {
@@ -172,16 +177,10 @@ func TestCorruptions(t *testing.T) {
 		encoded, err := gao.Encode(makeTestSlice(tc.k))
 		a.NoError(err)
 
-		corrupted := make(map[uint64]uint64, len(encoded))
-		for x, y := range encoded {
-			corrupted[x] = y
-		}
+		corrupted := slices.Clone(encoded)
 
 		// add corruptions
-		shuffledXs := shuffle(t, gao.EvaluationPoints())
-		for i := 0; i < gao.MaxErrors(); i++ {
-			corrupted[shuffledXs[i]] = rand.Uint64()
-		}
+		corruptCodeword(f, testRNG(t), corrupted, gao.MaxErrors())
 
 		a.Len(corrupted, gao.N())
 		a.NotEqual(encoded, corrupted)
@@ -210,15 +209,15 @@ func TestSliceEncodeDecode(t *testing.T) {
 		a.NoError(err)
 		originalData := makeTestSlice(tc.k)
 
-		// Test EncodeToSlice and DecodeFromSlice with no corruptions
-		encodedSlice, err := gao.EncodeToSlice(originalData)
+		// Test Encode and Decode with no corruptions
+		encodedSlice, err := gao.Encode(originalData)
 		a.NoError(err)
 		a.Len(encodedSlice, tc.n)
 
 		encodedCopy := make([]uint64, len(encodedSlice))
 		copy(encodedCopy, encodedSlice)
 
-		decodedSlice, err := gao.DecodeFromSlice(encodedCopy)
+		decodedSlice, err := gao.Decode(encodedCopy)
 		a.NoError(err)
 		a.Equal(originalData, decodedSlice)
 
@@ -227,7 +226,7 @@ func TestSliceEncodeDecode(t *testing.T) {
 		copy(corruptedSlice, encodedSlice)
 		corruptCodeword(f, rng, corruptedSlice, gao.MaxErrors())
 
-		decodedFromCorrupted, err := gao.DecodeFromSlice(corruptedSlice)
+		decodedFromCorrupted, err := gao.Decode(corruptedSlice)
 		a.NoError(err)
 		a.Equal(originalData, decodedFromCorrupted)
 	}
@@ -258,7 +257,7 @@ func TestOptimisticErrorFreePath(t *testing.T) {
 		a.NoError(err)
 
 		msg := makeTestSlice(tc.k)
-		enc1, err := gao.EncodeToSlice(msg)
+		enc1, err := gao.Encode(msg)
 		a.NoError(err)
 
 		// (a) correctness across 0..MaxErrors corruptions at random positions.
@@ -268,7 +267,7 @@ func TestOptimisticErrorFreePath(t *testing.T) {
 
 			corruptCodeword(f, rng, work, e)
 
-			decoded, err := gao.DecodeFromSlice(work)
+			decoded, err := gao.Decode(work)
 			a.NoError(err, "n=%d errors=%d", tc.n, e)
 			a.Equal(msg, decoded, "n=%d errors=%d", tc.n, e)
 		}
@@ -278,7 +277,7 @@ func TestOptimisticErrorFreePath(t *testing.T) {
 		for i := range msg2 {
 			msg2[i] = uint64(2*i + 1)
 		}
-		enc2, err := gao.EncodeToSlice(msg2)
+		enc2, err := gao.Encode(msg2)
 		a.NoError(err)
 
 		summed := make([]uint64, tc.n)
@@ -286,7 +285,7 @@ func TestOptimisticErrorFreePath(t *testing.T) {
 			summed[i] = f.Add(enc1[i], enc2[i])
 		}
 
-		decoded, err := gao.DecodeFromSlice(summed)
+		decoded, err := gao.Decode(summed)
 		a.NoError(err, "beyond-tolerance n=%d", tc.n)
 
 		want := make([]uint64, tc.k)
@@ -352,7 +351,7 @@ func BenchmarkDecode(b *testing.B) {
 	}
 }
 
-func BenchmarkDecodeFromSliceOnePercentCorruptionsNTT(b *testing.B) {
+func BenchmarkDecodeOnePercentCorruptionsNTT(b *testing.B) {
 	f, err := field.NewPrimeField(65537)
 	if err != nil {
 		b.Fatal(err)
@@ -369,7 +368,7 @@ func BenchmarkDecodeFromSliceOnePercentCorruptionsNTT(b *testing.B) {
 		}
 		slc := makeTestSlice(k)
 
-		encoded, err := gao.EncodeToSlice(slc)
+		encoded, err := gao.Encode(slc)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -394,7 +393,7 @@ func BenchmarkDecodeFromSliceOnePercentCorruptionsNTT(b *testing.B) {
 
 			for i := 0; i < b.N; i++ {
 				copy(work, corrupted)
-				if _, err := gao.DecodeFromSlice(work); err != nil {
+				if _, err := gao.Decode(work); err != nil {
 					b.Fatal(err)
 				}
 			}

@@ -28,7 +28,7 @@ func Example() {
 
 	data := []uint64{10, 20, 30, 40}
 
-	codeword, err := code.EncodeToSlice(data)
+	codeword, err := code.Encode(data)
 	if err != nil {
 		panic(err)
 	}
@@ -38,7 +38,7 @@ func Example() {
 		codeword[i] = 12345
 	}
 
-	decoded, err := code.DecodeFromSlice(codeword)
+	decoded, err := code.Decode(codeword)
 	if err != nil {
 		panic(err)
 	}

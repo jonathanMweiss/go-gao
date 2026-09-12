@@ -13,7 +13,7 @@ import (
 // theoretic transform, which is quasi-linear rather than the quadratic pointwise
 // evaluation of slowEvaluator.
 //
-// It requires n to be a power of two dividing p-1. NewCodeParameters checks this and
+// It requires n to be a power of two dividing p-1. NewCode checks this and
 // reports ErrUnsupportedSize rather than letting the evaluator fail later.
 //
 // An nttEvaluator holds no mutable state and is safe for concurrent use.
@@ -26,7 +26,7 @@ func newNttEvaluator(f field.Field) *nttEvaluator {
 }
 
 // supportsSize reports whether the field admits an NTT of length n, which requires n to
-// be a power of two of at least 2 that divides p-1. NewCodeParameters calls this so a
+// be a power of two of at least 2 that divides p-1. NewCode calls this so a
 // bad n surfaces as an error rather than a panic from inside Encode.
 func (e *nttEvaluator) supportsSize(n int) error {
 	if n <= 0 {
@@ -42,7 +42,7 @@ func (e *nttEvaluator) supportsSize(n int) error {
 // Each call builds a fresh slice, so the caller may modify it freely.
 //
 // It panics if the field does not admit an NTT of length n. Construct the code through
-// NewCodeParameters, which rejects such an n with ErrUnsupportedSize.
+// NewCode, which rejects such an n with ErrUnsupportedSize.
 func (e *nttEvaluator) EvaluationPoints(n int) []uint64 {
 	if err := e.supportsSize(n); err != nil {
 		panic(fmt.Sprintf("gao: nttEvaluator cannot evaluate at %d points: %v", n, err))
