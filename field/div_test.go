@@ -51,7 +51,7 @@ func TestDivDividendWithLowOrderZeros(t *testing.T) {
 			q, rem := pr.Div(a, b)
 
 			// a == q*b + rem, and deg(rem) < deg(b).
-			got := polyAdd(pr, polyMul(pr, q, b), rem)
+			got := pr.addNew(pr.mulNew(q, b), rem)
 			require.Equal(t, a.Degree(), got.Degree(),
 				"lowZeros=%d divisor=%v: q*b+rem must reproduce a", lowZeros, divisor)
 			require.True(t, a.Equals(got),
@@ -114,7 +114,7 @@ func FuzzDiv(fz *testing.F) {
 
 		require.Less(t, rem.Degree(), b.Degree(), "remainder must be smaller than the divisor")
 
-		got := polyAdd(ring, polyMul(ring, q, b), rem)
+		got := ring.addNew(ring.mulNew(q, b), rem)
 		require.True(t, a.Equals(got), "q*b + rem must reproduce a\n a  =%v\n got=%v", a, got)
 	})
 }

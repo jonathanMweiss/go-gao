@@ -168,19 +168,6 @@ func (r *PolyRing) newDst() *Polynomial {
 	return &Polynomial{f: r.f, isNTT: false}
 }
 
-func (r *PolyRing) trimTrailingZeros(p *Polynomial) {
-	if len(p.inner) == 0 || p.isNTT {
-		// In NTT domain we keep the fixed size.
-		return
-	}
-
-	i := len(p.inner) - 1
-	for i >= 0 && r.f.Equals(p.inner[i], 0) {
-		i--
-	}
-	p.inner = p.inner[:i+1]
-}
-
 // ---------- Poly ops ----------
 
 // Evaluate returns a(x) by Horner's rule.
@@ -216,7 +203,7 @@ func (r *PolyRing) MulScalar(a *Polynomial, scalar uint64, c *Polynomial) {
 	c.f = r.f
 	c.isNTT = a.isNTT // scalar mult preserves domain
 
-	r.trimTrailingZeros(c)
+	c.trimTrailingZeros()
 }
 
 // Add computes c = a + b. c may alias a or b.
@@ -253,7 +240,7 @@ func (r *PolyRing) Add(a, b, c *Polynomial) {
 
 	c.f = r.f
 	c.isNTT = a.isNTT
-	r.trimTrailingZeros(c)
+	c.trimTrailingZeros()
 }
 
 // Sub computes c = a - b. c may alias a or b.
@@ -291,7 +278,7 @@ func (r *PolyRing) Sub(a, b, c *Polynomial) {
 		}
 	}
 
-	r.trimTrailingZeros(c)
+	c.trimTrailingZeros()
 }
 
 // Mul computes c = a * b, choosing between schoolbook and NTT-based multiplication by size.
@@ -356,7 +343,7 @@ func (r *PolyRing) mulSchoolbook(a, b, c *Polynomial) {
 	c.inner = out
 	c.isNTT = false
 
-	r.trimTrailingZeros(c)
+	c.trimTrailingZeros()
 }
 
 // subMonomialMul subtracts ai * x^deg * b from rem, in place.
@@ -447,10 +434,10 @@ func (r *PolyRing) divSchoolbook(a, b *Polynomial, n, m int) (q *Polynomial, rem
 		}
 	}
 
-	r.trimTrailingZeros(rem)
+	rem.trimTrailingZeros()
 
 	q = r.NewPolynomial(qInner, false)
-	q.removeLeadingZeroes()
+	q.trimTrailingZeros()
 
 	return q, rem
 }
@@ -474,10 +461,10 @@ type polyMatrix2x2 struct {
 
 func (m polyMatrix2x2) Mul(r *PolyRing, other polyMatrix2x2) polyMatrix2x2 {
 	return polyMatrix2x2{
-		a00: polyAdd(r, polyMul(r, m.a00, other.a00), polyMul(r, m.a01, other.a10)),
-		a01: polyAdd(r, polyMul(r, m.a00, other.a01), polyMul(r, m.a01, other.a11)),
-		a10: polyAdd(r, polyMul(r, m.a10, other.a00), polyMul(r, m.a11, other.a10)),
-		a11: polyAdd(r, polyMul(r, m.a10, other.a01), polyMul(r, m.a11, other.a11)),
+		a00: r.addNew(r.mulNew(m.a00, other.a00), r.mulNew(m.a01, other.a10)),
+		a01: r.addNew(r.mulNew(m.a00, other.a01), r.mulNew(m.a01, other.a11)),
+		a10: r.addNew(r.mulNew(m.a10, other.a00), r.mulNew(m.a11, other.a10)),
+		a11: r.addNew(r.mulNew(m.a10, other.a01), r.mulNew(m.a11, other.a11)),
 	}
 }
 
@@ -486,13 +473,13 @@ func (m polyMatrix2x2) Mul(r *PolyRing, other polyMatrix2x2) polyMatrix2x2 {
 //
 // PartialGCD wants only the remainder, not the pair.
 func (m polyMatrix2x2) mulVecFirst(r *PolyRing, a, b *Polynomial) *Polynomial {
-	return polyAdd(r, polyMul(r, m.a00, a), polyMul(r, m.a01, b))
+	return r.addNew(r.mulNew(m.a00, a), r.mulNew(m.a01, b))
 }
 
 // full matrix vector product: (m.a00*a + m.a01*b, m.a10*a + m.a11*b)
 func (m polyMatrix2x2) MulVec(r *PolyRing, a, b *Polynomial) (*Polynomial, *Polynomial) {
 	aOut := m.mulVecFirst(r, a, b)
-	bOut := polyAdd(r, polyMul(r, m.a10, a), polyMul(r, m.a11, b))
+	bOut := r.addNew(r.mulNew(m.a10, a), r.mulNew(m.a11, b))
 	return aOut, bOut
 }
 
@@ -500,8 +487,8 @@ func (m polyMatrix2x2) MulVec(r *PolyRing, a, b *Polynomial) (*Polynomial, *Poly
 func (r *PolyRing) applyMatrix(M polyMatrix2x2, a, b *Polynomial) (*Polynomial, *Polynomial) {
 	aOut, bOut := M.MulVec(r, a, b)
 
-	r.trimTrailingZeros(aOut)
-	r.trimTrailingZeros(bOut)
+	aOut.trimTrailingZeros()
+	bOut.trimTrailingZeros()
 
 	return aOut, bOut
 }
@@ -801,15 +788,21 @@ func (r *PolyRing) canUseNTTConvolutionLen(convLen int) bool {
 	return modMinusOne%uint64(n) == 0
 }
 
-func polyMul(r *PolyRing, a, b *Polynomial) *Polynomial {
+// mulNew returns a * b as a freshly allocated polynomial, where Mul writes into a
+// destination the caller supplies.
+func (r *PolyRing) mulNew(a, b *Polynomial) *Polynomial {
 	out := r.newDst()
 	r.Mul(a, b, out)
+
 	return out
 }
 
-func polyAdd(r *PolyRing, a, b *Polynomial) *Polynomial {
+// addNew returns a + b as a freshly allocated polynomial, where Add writes into a
+// destination the caller supplies.
+func (r *PolyRing) addNew(a, b *Polynomial) *Polynomial {
 	out := r.newDst()
 	r.Add(a, b, out)
+
 	return out
 }
 
@@ -817,13 +810,16 @@ func polyAdd(r *PolyRing, a, b *Polynomial) *Polynomial {
 // avoiding a temporary allocation for the intermediate product q*b.
 // When q is large, it falls back to mulFull + Sub.
 // All polynomials must be in coefficient domain.
+//
+// returns dst for convenience.
 func (r *PolyRing) mulSubInto(dst, a, q, b *Polynomial) {
 	lq := len(q.inner)
 	lb := len(b.inner)
 
 	// For large q, fall back to mulFull + Sub with a temporary.
+	// (to use the NTT path, which is faster than schoolbook for large q)
 	if min(lq, lb) > nttMulThreshold {
-		r.Sub(a, polyMul(r, q, b), dst)
+		r.Sub(a, r.mulNew(q, b), dst)
 
 		return
 	}
@@ -855,7 +851,7 @@ func (r *PolyRing) mulSubInto(dst, a, q, b *Polynomial) {
 		}
 	}
 
-	r.trimTrailingZeros(dst)
+	dst.trimTrailingZeros()
 }
 
 /*
@@ -912,7 +908,7 @@ func (r *PolyRing) PartialGCD(a, b *Polynomial, stopDegree int) (gcd, x, y *Poly
 
 	// Apply the final transition matrix to the original inputs to get the desired remainder.
 	AOut := M.mulVecFirst(r, A, B)
-	r.trimTrailingZeros(AOut)
+	AOut.trimTrailingZeros()
 
 	// Return the remainder and its corresponding Bézout coefficients for 'a' and 'b':
 	// AOut = M.a00 * a + M.a01 * b

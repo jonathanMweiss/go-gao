@@ -134,7 +134,7 @@ func oldDivNTT(r *PolyRing, a, b *Polynomial) (q, rem *Polynomial) {
 	prod := oldMulTrunc(r, q, b, n+1)
 	rem = &Polynomial{f: r.f, isNTT: false}
 	r.Sub(a, prod, rem)
-	r.trimTrailingZeros(rem)
+	rem.trimTrailingZeros()
 
 	return q, rem
 }

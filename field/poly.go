@@ -99,27 +99,13 @@ func (p *Polynomial) leadingCoeffPos() int {
 	return -1
 }
 
-func (p *Polynomial) removeLeadingZeroes() {
+func (p *Polynomial) trimTrailingZeros() {
 	if p.isNTT {
+		// In NTT domain we keep the fixed size.
 		return
 	}
 
-	lead := p.leadingCoeffPos()
-	if lead < 0 {
-		if cap(p.inner) == 0 {
-			p.inner = []uint64{0} // must allocate.
-
-			return
-		}
-
-		// reusing the backing array
-		p.inner = p.inner[:1]
-		p.inner[0] = 0
-
-		return
-	}
-
-	p.inner = p.inner[:lead+1]
+	p.inner = p.inner[:p.leadingCoeffPos()+1]
 }
 
 // Copy returns a deep copy of p, sharing no memory with it.
@@ -137,7 +123,7 @@ func (p *Polynomial) Copy() *Polynomial {
 // cost of copying it.
 func (p *Polynomial) String() string {
 	q := p.Copy()
-	q.removeLeadingZeroes()
+	q.trimTrailingZeros()
 
 	if len(q.inner) == 1 {
 		return strconv.FormatUint(q.inner[0], 10)

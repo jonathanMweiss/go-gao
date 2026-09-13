@@ -136,7 +136,7 @@ func (r *PolyRing) NttBackward(a *Polynomial) error {
 	if err := r.nttBackwardNoTrim(a); err != nil {
 		return err
 	}
-	r.trimTrailingZeros(a)
+	a.trimTrailingZeros()
 
 	return nil
 }

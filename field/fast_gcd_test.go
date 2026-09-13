@@ -150,7 +150,7 @@ func TestHGCDSecondRecursionCoverage(t *testing.T) {
 
 func bezoutIdentityHolds(pr *PolyRing, a, b, gcd, x, y *Polynomial) bool {
 	// ax + by should equal gcd
-	ax := polyMul(pr, a, x)
-	by := polyMul(pr, b, y)
-	return polyAdd(pr, ax, by).Equals(gcd)
+	ax := pr.mulNew(a, x)
+	by := pr.mulNew(b, y)
+	return pr.addNew(ax, by).Equals(gcd)
 }
