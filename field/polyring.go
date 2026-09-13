@@ -781,10 +781,8 @@ func (r *PolyRing) divViaNTT(a, b *Polynomial, n, m int) (q, rem *Polynomial) {
 	q = Qstar
 
 	// 5) rem = a − q*b
-	tmp := r.mulTrunc(q, b, n+1) // full product length (deg = n)
 	rem = r.newDst()
-	r.Sub(a, tmp, rem)       // coeff-domain subtraction
-	r.trimTrailingZeros(rem) // ensure deg(rem) < deg(b)
+	r.mulSubInto(rem, a, q, b)
 
 	return q, rem
 }
@@ -823,21 +821,9 @@ func (r *PolyRing) mulSubInto(dst, a, q, b *Polynomial) {
 	lq := len(q.inner)
 	lb := len(b.inner)
 
-	// If q or b is empty, dst = a.
-	if lq == 0 || lb == 0 {
-		dst.f = r.f
-		dst.isNTT = false
-		ensureLen(dst, len(a.inner))
-		copy(dst.inner, a.inner)
-
-		return
-	}
-
 	// For large q, fall back to mulFull + Sub with a temporary.
 	if min(lq, lb) > nttMulThreshold {
-		tmp := r.newDst()
-		r.Mul(q, b, tmp)
-		r.Sub(a, tmp, dst)
+		r.Sub(a, polyMul(r, q, b), dst)
 
 		return
 	}
@@ -854,9 +840,7 @@ func (r *PolyRing) mulSubInto(dst, a, q, b *Polynomial) {
 
 	// Start with a copy of `a`, zero-extended.
 	la := len(a.inner)
-	if la > 0 {
-		copy(dst.inner[:la], a.inner)
-	}
+	copy(dst.inner, a.inner)
 	clear(dst.inner[la:])
 
 	// Subtract q*b from dst in-place: dst[i+j] -= q[i] * b[j]
