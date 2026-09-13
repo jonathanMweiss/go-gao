@@ -539,15 +539,26 @@ func (r *PolyRing) rev(p *Polynomial, L int) *Polynomial {
 		return out
 	}
 
+	// specifically not using Copy(): revInPlace below requires that out.inner be exactly L
+	// and Copy() would preserve p's length, which may be shorter.
 	out.inner = make([]uint64, L)
-
-	for i := range out.inner {
-		if j := L - 1 - i; j < len(p.inner) {
-			out.inner[i] = r.f.Reduce(p.inner[j])
-		} // else leave as zero
+	for i, v := range p.inner[:min(L, len(p.inner))] {
+		out.inner[i] = r.f.Reduce(v)
 	}
 
+	revInPlace(out, L)
+
 	return out
+}
+
+// revInPlace reverses p's first L coefficients in place, where rev would allocate a
+// second buffer to copy them into. Only valid when p already holds exactly L
+// coefficients, so that the reversal is a permutation of what is there.
+func revInPlace(p *Polynomial, L int) {
+	for i := 0; i < L/2; i++ {
+		j := L - 1 - i
+		p.inner[i], p.inner[j] = p.inner[j], p.inner[i]
+	}
 }
 
 func nextPow2(n int) int {
@@ -707,10 +718,17 @@ func (r *PolyRing) seriesInverse(b *Polynomial, k int) *Polynomial {
 		panic("seriesInverse: constant term is zero")
 	}
 
+	// Newton doubles m up to k, and mulTruncInto reallocates a destination whose capacity
+	// is short. Starting all three at capacity k costs one allocation each instead of one
+	// per doubling, and the loop below never grows them again.
+	//
+	// t and next trade places every iteration, so which of the two is returned depends on
+	// the number of steps. tmp never escapes.
 	b0 := r.f.Reduce(b.inner[0])
-	t := &Polynomial{f: r.f, isNTT: false, inner: []uint64{r.f.Inverse(b0)}}
-	tmp := &Polynomial{f: r.f, isNTT: false}
-	next := &Polynomial{f: r.f, isNTT: false}
+	t := &Polynomial{f: r.f, isNTT: false, inner: make([]uint64, 1, k)}
+	t.inner[0] = r.f.Inverse(b0)
+	next := &Polynomial{f: r.f, isNTT: false, inner: make([]uint64, 0, k)}
+	tmp := &Polynomial{f: r.f, inner: make([]uint64, k)}
 	two := r.f.Reduce(2)
 
 	f := r.f
@@ -771,18 +789,17 @@ func (r *PolyRing) divViaNTT(a, b *Polynomial) (q, rem *Polynomial) {
 	T := r.seriesInverse(Bstar, k) // length k
 
 	// 3) Q* = A* * T mod x^k
-	Qstar := &Polynomial{f: r.f, isNTT: false}
-	r.mulTruncInto(Qstar, Astar, T, k)
+	Qstar := r.mulTrunc(Astar, T, k)
 
 	// 4) Reverse Q* back into q, over the quotient length k rather than Q*'s own degree.
 	//
 	// In the book's notation this step is rev_{k-1}, not rev_k: its subscript is a degree
 	// bound, whereas k here is a coefficient count, and deg(q) = n-m = k-1.
-	q = r.rev(Qstar, k)
+	revInPlace(Qstar, k)
+	q = Qstar
 
 	// 5) rem = a − q*b
-	prod := &Polynomial{f: r.f, isNTT: false}
-	r.mulTruncInto(prod, q, b, n+1) // full product length (deg = n)
+	prod := r.mulTrunc(q, b, n+1) // full product length (deg = n)
 	rem = &Polynomial{f: r.f, isNTT: false}
 	r.Sub(a, prod, rem)      // coeff-domain subtraction
 	r.trimTrailingZeros(rem) // ensure deg(rem) < deg(b)

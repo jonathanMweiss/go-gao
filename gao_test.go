@@ -6,6 +6,7 @@ package gao
 import (
 	"fmt"
 	"math/rand"
+	"runtime"
 	"slices"
 	"testing"
 	"time"
@@ -359,6 +360,52 @@ func BenchmarkDecode(b *testing.B) {
 				})
 			}
 		}
+	}
+}
+
+// BenchmarkDecodeParallel is where allocation work either pays or does not.
+//
+// Decode allocates per call, so its cost to a server is not only its own runtime but the
+// GC cycles that allocation rate drives, which are charged to every other goroutine in the
+// process. A single-threaded ns/op cannot see that. This runs the same decode on every
+// core at once, where the allocator and the collector are actually contended.
+func BenchmarkDecodeParallel(b *testing.B) {
+	f, err := field.NewPrimeField(65537)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	const k = 1 << 12
+
+	n := 2 * k
+
+	code, err := NewCode(f, n, k, RequireNTT())
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	encoded, err := code.Encode(makeTestSlice(k))
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	corruptCodeword(f, rand.New(rand.NewSource(1337)), encoded, n/100)
+
+	for _, procs := range []int{1, 4, runtime.NumCPU()} {
+		b.Run(fmt.Sprintf("procs=%d", procs), func(b *testing.B) {
+			b.SetParallelism(procs)
+			b.SetBytes(int64(len(encoded) * 8))
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					if _, err := code.Decode(encoded); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		})
 	}
 }
 
