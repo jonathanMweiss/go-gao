@@ -559,8 +559,8 @@ func TestDivNTT(t *testing.T) {
 
 		pr := NewPolyRing(f)
 		// Ensuring both methods produce the same quotient and remainder.
-		quo1, rem1 := pr.divSchoolbook(p.Copy(), q.Copy())
-		quo2, rem2 := pr.divViaNTT(p.Copy(), q.Copy())
+		quo1, rem1 := pr.divSchoolbook(p.Copy(), q.Copy(), p.Degree(), q.Degree())
+		quo2, rem2 := pr.divViaNTT(p.Copy(), q.Copy(), p.Degree(), q.Degree())
 		a.True(quo1.Equals(quo2))
 		a.True(rem1.Equals(rem2))
 	}
@@ -602,8 +602,8 @@ func BenchmarkDivs(b *testing.B) {
 		q := randomPolynomial(f, baseSeed+67890+uint64(tc.degB), tc.degB)
 
 		// Sanity check: both paths agree (outside the timer).
-		quo1, rem1 := pr.divSchoolbook(p.Copy(), q.Copy())
-		quo2, rem2 := pr.divViaNTT(p.Copy(), q.Copy())
+		quo1, rem1 := pr.divSchoolbook(p.Copy(), q.Copy(), p.Degree(), q.Degree())
+		quo2, rem2 := pr.divViaNTT(p.Copy(), q.Copy(), p.Degree(), q.Degree())
 		if !quo1.Equals(quo2) || !rem1.Equals(rem2) {
 			b.Fatalf("mismatch for %s", name)
 		}
@@ -626,11 +626,52 @@ func BenchmarkDivs(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				qq, rr := pr.divViaNTT(p.Copy(), q.Copy())
+				qq, rr := pr.divViaNTT(p.Copy(), q.Copy(), p.Degree(), q.Degree())
 				if qq == nil || rr == nil {
 					b.Fatal("nil result")
 				}
 			}
 		})
+	}
+}
+
+// Mul documents that c may alias an input, and both dispatch paths have to honour it.
+// The schoolbook path used to clear c's array in place before reading the operands, so
+// an aliased destination with enough capacity to hold the product silently produced the
+// zero polynomial.
+func TestMulAliasedDestination(t *testing.T) {
+	a := assert.New(t)
+
+	f, err := NewPrimeField(65537)
+	a.NoError(err)
+
+	r := NewPolyRing(f)
+
+	// degree 1 and 8 dispatch to schoolbook, 64 to the NTT path.
+	for _, degree := range []int{1, 8, 64} {
+		p := randomPolynomial(f, 12345+uint64(degree), degree)
+
+		want := &Polynomial{}
+		r.Mul(p, p, want)
+
+		// Spare capacity is what made the in-place clear reachable.
+		withRoom := func() *Polynomial {
+			q := p.Copy()
+			q.inner = append(make([]uint64, 0, 4*degree+4), q.inner...)
+
+			return q
+		}
+
+		both := withRoom()
+		r.Mul(both, both, both)
+		a.True(want.Equals(both), "degree %d, c == a == b: got %s, want %s", degree, both, want)
+
+		lhs := withRoom()
+		r.Mul(lhs, p.Copy(), lhs)
+		a.True(want.Equals(lhs), "degree %d, c == a: got %s, want %s", degree, lhs, want)
+
+		rhs := withRoom()
+		r.Mul(p.Copy(), rhs, rhs)
+		a.True(want.Equals(rhs), "degree %d, c == b: got %s, want %s", degree, rhs, want)
 	}
 }

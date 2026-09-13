@@ -180,7 +180,7 @@ func BenchmarkDivNTTLarge_OldVsOptimized(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, _ = pr.divViaNTT(a, d)
+				_, _ = pr.divViaNTT(a, d, a.Degree(), d.Degree())
 			}
 		})
 	}

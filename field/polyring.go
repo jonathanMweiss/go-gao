@@ -83,7 +83,7 @@ func (r *PolyRing) NewPolynomial(inner []uint64, isPointRepresentation bool) *Po
 func (r *PolyRing) Product(polys []*Polynomial) *Polynomial {
 	switch len(polys) {
 	case 0:
-		return makeConstantPoly(r.f, 1)
+		return polyOne(r.f)
 	case 1:
 		// Copy, so the caller cannot mutate the result through the input slice.
 		return polys[0].Copy()
@@ -105,7 +105,7 @@ func (r *PolyRing) productTree(polys []*Polynomial) *Polynomial {
 	left := r.productTree(polys[:mid])
 	right := r.productTree(polys[mid:])
 
-	res := &Polynomial{}
+	res := r.newDst()
 	r.Mul(left, right, res)
 
 	return res
@@ -142,6 +142,30 @@ func ensureLenCheap(c *Polynomial, n int) {
 	}
 
 	c.inner = c.inner[:n]
+}
+
+// ensureLenZeroed resizes c.inner to exactly n and zeroes every element.
+func ensureLenZeroed(c *Polynomial, n int) {
+	c.inner = resizeZeroed(c.inner, n)
+}
+
+// resizeZeroed returns buf resized to exactly n elements, all zero, reusing buf's
+// array when it is already large enough.
+func resizeZeroed(buf []uint64, n int) []uint64 {
+	if cap(buf) < n {
+		return make([]uint64, n)
+	}
+
+	buf = buf[:n]
+	clear(buf)
+
+	return buf
+}
+
+// newDst returns an empty coefficient-domain polynomial over this ring's field, for
+// use as an operation's destination.
+func (r *PolyRing) newDst() *Polynomial {
+	return &Polynomial{f: r.f, isNTT: false}
 }
 
 func (r *PolyRing) trimTrailingZeros(p *Polynomial) {
@@ -287,12 +311,8 @@ func (r *PolyRing) Mul(a, b, c *Polynomial) {
 	// In NTT domain, multiplication is pointwise and preserves NTT representation.
 	// (preOpVerification ensures a.isNTT == b.isNTT)
 	if a.isNTT {
-		n := len(a.inner)
-		ensureLen(c, n)
-		r.pointwiseMult(a, b, c)
+		r.mulPointwiseInto(a, b, c)
 
-		c.f = r.f
-		c.isNTT = true
 		return
 	}
 
@@ -306,24 +326,14 @@ func (r *PolyRing) Mul(a, b, c *Polynomial) {
 }
 
 func (r *PolyRing) mulSchoolbook(a, b, c *Polynomial) {
-	if err := preOpVerification(a, b); err != nil {
-		panic(err)
-	}
-
-	if a.isNTT || b.isNTT {
-		panic("mulSchoolbook cannot handle NTT polynomials")
-	}
-
 	f := r.f
 
 	newLen := len(a.inner) + len(b.inner) - 1
 
 	// Decide where to write: use c.inner if capacity is enough; else allocate.
 	var out []uint64
-	if cap(c.inner) >= newLen {
-		out = c.inner[:newLen]
-		clear(out)
-
+	if c != a && c != b {
+		out = resizeZeroed(c.inner, newLen)
 	} else {
 		out = make([]uint64, newLen)
 	}
@@ -342,7 +352,7 @@ func (r *PolyRing) mulSchoolbook(a, b, c *Polynomial) {
 	}
 
 	// Write result into c (safe even if c==a or c==b because we used `out`).
-	c.f = a.f
+	c.f = r.f
 	c.inner = out
 	c.isNTT = false
 
@@ -388,6 +398,7 @@ func (r *PolyRing) Div(a, b *Polynomial) (q *Polynomial, rem *Polynomial) {
 		panic("Div expects coefficient-domain polynomials")
 	}
 
+	// True degrees is needed. (using len() caused a bug before).
 	bDeg := b.Degree()
 	aDeg := a.Degree()
 
@@ -406,27 +417,18 @@ func (r *PolyRing) Div(a, b *Polynomial) (q *Polynomial, rem *Polynomial) {
 	maxConvLen := max(2*quotLen-1, aDeg+1)
 
 	if quotLen > nttMulThreshold && r.canUseNTTConvolutionLen(maxConvLen) {
-		return r.divViaNTT(a, b)
+		return r.divViaNTT(a, b, aDeg, bDeg)
 	}
 
-	return r.divSchoolbook(a, b)
+	return r.divSchoolbook(a, b, aDeg, bDeg)
 }
 
 // Following Algorithm 2.5 (Polynomial division with remainder) in
 // `Modern Computer Algebra` by Joachim von zur Gathen and Jürgen Gerhard
 //
 // returns q, r such that p = q*v + r.
-func (r *PolyRing) divSchoolbook(a, b *Polynomial) (q *Polynomial, rem *Polynomial) {
-	if err := preOpVerification(a, b); err != nil {
-		panic(err)
-	}
+func (r *PolyRing) divSchoolbook(a, b *Polynomial, n, m int) (q *Polynomial, rem *Polynomial) {
 	fld := r.f
-
-	if b.isNTT {
-		panic("divSchoolbook expects coefficient-domain polynomials")
-	}
-
-	n, m := a.Degree(), b.Degree()
 
 	u := fld.Inverse(b.LeadCoeff()) // Assumes inverse exists.
 
@@ -480,24 +482,36 @@ func (m polyMatrix2x2) Mul(r *PolyRing, other polyMatrix2x2) polyMatrix2x2 {
 }
 
 // mulVecFirst is MulVec's first component on its own: m.a00*a + m.a01*b.
+// so it's just one part of the matrix-vector product.
 //
 // PartialGCD wants only the remainder, not the pair.
 func (m polyMatrix2x2) mulVecFirst(r *PolyRing, a, b *Polynomial) *Polynomial {
 	return polyAdd(r, polyMul(r, m.a00, a), polyMul(r, m.a01, b))
 }
 
+// full matrix vector product: (m.a00*a + m.a01*b, m.a10*a + m.a11*b)
 func (m polyMatrix2x2) MulVec(r *PolyRing, a, b *Polynomial) (*Polynomial, *Polynomial) {
-	aOut := polyAdd(r, polyMul(r, m.a00, a), polyMul(r, m.a01, b))
+	aOut := m.mulVecFirst(r, a, b)
 	bOut := polyAdd(r, polyMul(r, m.a10, a), polyMul(r, m.a11, b))
+	return aOut, bOut
+}
+
+// applyMatrix advances the pair (a, b) by M, trimming both components of the result.
+func (r *PolyRing) applyMatrix(M polyMatrix2x2, a, b *Polynomial) (*Polynomial, *Polynomial) {
+	aOut, bOut := M.MulVec(r, a, b)
+
+	r.trimTrailingZeros(aOut)
+	r.trimTrailingZeros(bOut)
+
 	return aOut, bOut
 }
 
 func polyIdentity2x2(f Field) polyMatrix2x2 {
 	return polyMatrix2x2{
-		a00: makeConstantPoly(f, 1), // x0
-		a01: makeConstantPoly(f, 0), // y0
-		a10: makeConstantPoly(f, 0), // x1
-		a11: makeConstantPoly(f, 1), // y1
+		a00: polyOne(f),  // x0
+		a01: polyZero(f), // y0
+		a10: polyZero(f), // x1
+		a11: polyOne(f),  // y1
 	}
 }
 
@@ -514,8 +528,8 @@ func polyIdentity2x2(f Field) polyMatrix2x2 {
 // writing a specialized function rather than Mul+Sub saves allocations and a full-length multiplication per step.
 func (r *PolyRing) applyStep(M polyMatrix2x2, q *Polynomial) polyMatrix2x2 {
 	// mulSubInto writes a - q*b into a destination that must alias neither.
-	lo := &Polynomial{f: r.f}
-	hi := &Polynomial{f: r.f}
+	lo := r.newDst()
+	hi := r.newDst()
 
 	r.mulSubInto(lo, M.a00, q, M.a10) // lo = M.a00 - q*M.a10
 	r.mulSubInto(hi, M.a01, q, M.a11) // hi = M.a01 - q*M.a11
@@ -534,7 +548,7 @@ func (r *PolyRing) applyStep(M polyMatrix2x2, q *Polynomial) polyMatrix2x2 {
 // that found its own anchor by scanning for the degree silently shifted the quotient
 // down by one degree for every low-order zero of the dividend.
 func (r *PolyRing) rev(p *Polynomial, L int) *Polynomial {
-	out := &Polynomial{f: r.f, isNTT: false}
+	out := r.newDst()
 	if L <= 0 {
 		return out
 	}
@@ -566,29 +580,15 @@ func nextPow2(n int) int {
 }
 
 func (r *PolyRing) mulViaNTT(a, b, c *Polynomial) {
-	if err := preOpVerification(a, b); err != nil {
-		panic(err)
+	// if both are NTT, pointwise multiply
+	if a.isNTT && b.isNTT {
+		r.mulPointwiseInto(a, b, c)
+
+		return
 	}
 
 	// else, use mulTrunc with total length (coeff-domain out)
 	la, lb := len(a.inner), len(b.inner)
-	if la == 0 || lb == 0 {
-		c.f, c.inner, c.isNTT = r.f, c.inner[:0], false
-		return
-	}
-
-	// if both are NTT, pointwise multiply
-	if a.isNTT && b.isNTT {
-		n := len(a.inner)
-		ensureLen(c, n)
-		r.pointwiseMult(a, b, c)
-
-		c.f = r.f
-		c.isNTT = true
-
-		return
-	}
-
 	total := la + lb - 1
 
 	// mulTruncInto clears its destination before reading the operands, so it cannot be
@@ -605,6 +605,16 @@ func (r *PolyRing) mulViaNTT(a, b, c *Polynomial) {
 	c.f, c.isNTT = r.f, false
 }
 
+// mulPointwiseInto writes the product of a and b into c, all three in the NTT domain,
+// where multiplication is pointwise. a and b must carry the same number of evaluations.
+func (r *PolyRing) mulPointwiseInto(a, b, c *Polynomial) {
+	ensureLen(c, len(a.inner))
+	r.pointwiseMult(a, b, c)
+
+	c.f = r.f
+	c.isNTT = true
+}
+
 func (r *PolyRing) pointwiseMult(a, b, c *Polynomial) {
 	f := r.f
 	for i := range c.inner {
@@ -615,19 +625,8 @@ func (r *PolyRing) pointwiseMult(a, b, c *Polynomial) {
 func (r *PolyRing) getNttMulScratch(n int) *nttMulScratch {
 	s := nttMulScratchPool.Get().(*nttMulScratch)
 
-	if cap(s.a) < n {
-		s.a = make([]uint64, n)
-	} else {
-		s.a = s.a[:n]
-		clear(s.a)
-	}
-
-	if cap(s.b) < n {
-		s.b = make([]uint64, n)
-	} else {
-		s.b = s.b[:n]
-		clear(s.b)
-	}
+	s.a = resizeZeroed(s.a, n)
+	s.b = resizeZeroed(s.b, n)
 
 	return s
 }
@@ -639,8 +638,9 @@ func (r *PolyRing) putNttMulScratch(s *nttMulScratch) {
 // Multiply polynomials and then truncate to the lowest L terms.
 // Use NTT under the hood (size = nextPow2(L + L - 1)), then slice [:L].
 func (r *PolyRing) mulTrunc(a, b *Polynomial, L int) *Polynomial {
-	out := &Polynomial{f: r.f, isNTT: false}
+	out := r.newDst()
 	r.mulTruncInto(out, a, b, L)
+
 	return out
 }
 
@@ -653,12 +653,7 @@ func (r *PolyRing) mulTruncInto(dst *Polynomial, a, b *Polynomial, L int) {
 		return
 	}
 
-	if cap(dst.inner) < L {
-		dst.inner = make([]uint64, L)
-	} else {
-		dst.inner = dst.inner[:L]
-		clear(dst.inner)
-	}
+	ensureLenZeroed(dst, L)
 
 	if a == nil || b == nil {
 		return
@@ -712,8 +707,9 @@ func (r *PolyRing) mulTruncInto(dst *Polynomial, a, b *Polynomial, L int) {
 //   - b.inner[0] != 0 (invertible constant term)
 func (r *PolyRing) seriesInverse(b *Polynomial, k int) *Polynomial {
 	if k <= 0 {
-		return &Polynomial{f: r.f, isNTT: false}
+		return r.newDst()
 	}
+
 	if len(b.inner) == 0 || r.f.Equals(b.inner[0], 0) {
 		panic("seriesInverse: constant term is zero")
 	}
@@ -759,21 +755,7 @@ func (r *PolyRing) seriesInverse(b *Polynomial, k int) *Polynomial {
 //
 // The algorithm capitalize the notion that Newton Iteration can be used to compute the inverse of
 // a polynomial in O(n log n) time.
-func (r *PolyRing) divViaNTT(a, b *Polynomial) (q, rem *Polynomial) {
-	if a == nil || b == nil || a.isNTT || b.isNTT {
-		panic("LongDivNTT expects non-nil coefficient-domain polynomials")
-	}
-	// True degrees is needed. (using len() caused a bug before).
-	n := a.Degree()
-	m := b.Degree()
-	if m < 0 {
-		panic("division by zero polynomial")
-	}
-	if n < m {
-		// q = 0, r = a
-		return &Polynomial{f: r.f, isNTT: false, inner: []uint64{0}}, a.Copy()
-	}
-
+func (r *PolyRing) divViaNTT(a, b *Polynomial, n, m int) (q, rem *Polynomial) {
 	k := n - m + 1 // quotient length
 
 	// 1) Reverse both inputs whole.
@@ -799,9 +781,9 @@ func (r *PolyRing) divViaNTT(a, b *Polynomial) (q, rem *Polynomial) {
 	q = Qstar
 
 	// 5) rem = a − q*b
-	prod := r.mulTrunc(q, b, n+1) // full product length (deg = n)
-	rem = &Polynomial{f: r.f, isNTT: false}
-	r.Sub(a, prod, rem)      // coeff-domain subtraction
+	tmp := r.mulTrunc(q, b, n+1) // full product length (deg = n)
+	rem = r.newDst()
+	r.Sub(a, tmp, rem)       // coeff-domain subtraction
 	r.trimTrailingZeros(rem) // ensure deg(rem) < deg(b)
 
 	return q, rem
@@ -822,13 +804,13 @@ func (r *PolyRing) canUseNTTConvolutionLen(convLen int) bool {
 }
 
 func polyMul(r *PolyRing, a, b *Polynomial) *Polynomial {
-	out := &Polynomial{f: r.f, isNTT: false}
+	out := r.newDst()
 	r.Mul(a, b, out)
 	return out
 }
 
 func polyAdd(r *PolyRing, a, b *Polynomial) *Polynomial {
-	out := &Polynomial{f: r.f, isNTT: false}
+	out := r.newDst()
 	r.Add(a, b, out)
 	return out
 }
@@ -847,14 +829,16 @@ func (r *PolyRing) mulSubInto(dst, a, q, b *Polynomial) {
 		dst.isNTT = false
 		ensureLen(dst, len(a.inner))
 		copy(dst.inner, a.inner)
+
 		return
 	}
 
 	// For large q, fall back to mulFull + Sub with a temporary.
 	if min(lq, lb) > nttMulThreshold {
-		tmp := &Polynomial{f: r.f}
+		tmp := r.newDst()
 		r.Mul(q, b, tmp)
 		r.Sub(a, tmp, dst)
+
 		return
 	}
 
@@ -873,9 +857,7 @@ func (r *PolyRing) mulSubInto(dst, a, q, b *Polynomial) {
 	if la > 0 {
 		copy(dst.inner[:la], a.inner)
 	}
-	for i := la; i < n; i++ {
-		dst.inner[i] = 0
-	}
+	clear(dst.inner[la:])
 
 	// Subtract q*b from dst in-place: dst[i+j] -= q[i] * b[j]
 	// Iterate over q (the small operand) in the outer loop.
@@ -990,9 +972,7 @@ func (r *PolyRing) fastGCDMatrix(a, b *Polynomial, stopDegree int) polyMatrix2x2
 	// 1. Half-GCD Step:
 	// Use HGCD to compute a matrix M that reduces degrees significantly.
 	M := r.hgcd(a, b, reduceBy)
-	aCur, bCur := M.MulVec(r, a, b)
-	r.trimTrailingZeros(aCur)
-	r.trimTrailingZeros(bCur)
+	aCur, bCur := r.applyMatrix(M, a, b)
 
 	// hgcd stopped because it couldn't guarantee the next step would not cross stopDegree,
 	// so we revert to the iterative routine to complete the task.
@@ -1045,19 +1025,14 @@ func (r *PolyRing) hgcd(a, b *Polynomial, reduceBy int) polyMatrix2x2 {
 
 	// firstShift discards the low coefficients, retaining 2*halfReduce+1 of them -- the
 	// window the recursion is allowed to spend covering halfReduce.
-	firstShift := degA - 2*halfReduce
-	if firstShift < 0 {
-		firstShift = 0
-	}
+	firstShift := max(degA-2*halfReduce, 0)
 
 	// 1. First Recursive Call (on high parts):
 	// Covers halfReduce of the distance.
 	R := r.hgcd(r.shiftRight(a, firstShift), r.shiftRight(b, firstShift), halfReduce)
 
 	// 2. Apply the transition matrix R to the full inputs.
-	aCur, bCur := R.MulVec(r, a, b)
-	r.trimTrailingZeros(aCur)
-	r.trimTrailingZeros(bCur)
+	aCur, bCur := r.applyMatrix(R, a, b)
 
 	// reachedDeg is how far down the sequence has come, so degA-reachedDeg is the
 	// distance covered so far.
@@ -1086,10 +1061,7 @@ func (r *PolyRing) hgcd(a, b *Polynomial, reduceBy int) polyMatrix2x2 {
 	}
 
 	// Recalculate the shift against the degree the pair now leads with.
-	secondShift := reachedDeg - 2*restReduce
-	if secondShift < 0 {
-		secondShift = 0
-	}
+	secondShift := max(reachedDeg-2*restReduce, 0)
 
 	S := r.hgcd(r.shiftRight(bCur, secondShift), r.shiftRight(rem, secondShift), restReduce)
 
