@@ -222,24 +222,18 @@ func (r *PolyRing) Add(a, b, c *Polynomial) {
 	blen := len(b.inner)
 	n := max(alen, blen)
 	ensureLen(c, n)
+	minLen := min(alen, blen)
 
 	f := r.f
 
-	var av, bv uint64
-	for i := 0; i < n; i++ {
-		if i < alen {
-			av = a.inner[i]
-		} else {
-			av = 0
-		}
+	for i := 0; i < minLen; i++ {
+		c.inner[i] = f.Add(a.inner[i], b.inner[i])
+	}
 
-		if i < blen {
-			bv = b.inner[i]
-		} else {
-			bv = 0
-		}
-
-		c.inner[i] = f.Add(av, bv)
+	if alen > blen {
+		copy(c.inner[minLen:], a.inner[minLen:])
+	} else if blen > alen {
+		copy(c.inner[minLen:], b.inner[minLen:])
 	}
 
 	c.f = r.f
