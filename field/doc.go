@@ -12,7 +12,7 @@ multipoint interpolation. It depends on nothing outside the standard library.
 # Fields
 
 [NewPrimeField] builds a [PrimeField] for a prime modulus below 2^63. Elements
-are plain uint64 values in [0, p), arithmetic is modular, and [Field.Reduce]
+are plain uint64 values in [0, p), arithmetic is modular, and [PrimeField.Reduce]
 normalizes a value that may fall outside the range.
 
 	f, err := field.NewPrimeField(65537)
@@ -21,14 +21,10 @@ normalizes a value that may fall outside the range.
 	}
 	c := f.Mul(f.Add(2, 3), f.Inverse(7))
 
-[Field] is the interface those operations form, and it is deliberately small:
-nine arithmetic operations and the modulus, every one of them elementary.
-Implement it to supply a field with faster arithmetic than [PrimeField] — one
-reducing by Montgomery or Barrett rather than by a hardware divide — without
-having to know anything about the structure of the multiplicative group.
+[Field] names that arithmetic. It is an alias for the concrete [PrimeField].
 
 [RootOfUnity] supplies that structure instead, deriving a primitive n-th root
-of unity from any Field. It accepts only orders that are powers of two
+of unity from the field. It accepts only orders that are powers of two
 dividing p-1, because those are the only sizes this package transforms at. The
 largest such order — the largest power of two dividing p-1, not the size of p
 — is what bounds the code lengths a field can serve, and it is worth checking

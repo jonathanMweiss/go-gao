@@ -10,36 +10,14 @@ import (
 	"math/bits"
 )
 
-// Field is the arithmetic of a finite field, with elements represented as uint64.
-//
-// Every method is an elementary field operation, and nothing here requires knowing the
-// structure of the multiplicative group: a field that can add, multiply and invert is a
-// complete implementation. Whatever else this package needs -- roots of unity above all
-// -- it derives from these operations; see [RootOfUnity].
-//
-// That is deliberate, and the interface is meant to stay this size: implementing it
-// should never come to require more than the arithmetic. Implement it to bring a field
-// faster than [PrimeField], such as one reducing by Montgomery or Barrett rather than by
-// a hardware divide.
-//
-// Implementations must be safe for concurrent use and must return reduced elements in
-// the range [0, Modulus).
-type Field interface {
-	Equals(a, b uint64) bool
-	Add(a, b uint64) uint64
-	Sub(a, b uint64) uint64
-	Mul(a, b uint64) uint64
-	Pow(base, exp uint64) uint64
+// Field is the arithmetic this package computes over, an alias for the concrete
+// [PrimeField]. Elements are uint64 values in [0, p).
+type Field = *PrimeField
 
-	Neg(a uint64) uint64
-	Inverse(a uint64) uint64
-	Reduce(a uint64) uint64
-
-	Modulus() uint64
-}
-
-// PrimeField implements [Field] over the integers modulo a prime p < 2^63, reducing with
-// a hardware divide. It is safe for concurrent use.
+// PrimeField is the arithmetic of the integers modulo a prime p < 2^63.
+// It is safe for concurrent use.
+//
+// Every operation returns an element reduced into [0, p).
 type PrimeField struct {
 	prime uint64
 }
