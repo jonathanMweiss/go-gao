@@ -9,7 +9,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestHGCDSecondRecursivePath forces the second recursive call in hgcd and fastGCDRec.
+// TestHGCDSecondRecursivePath forces the second recursive call in hgcd -- the one that
+// advances the remaining distance after the mandatory division. At these sizes it is
+// taken 63 times.
 func TestHGCDSecondRecursivePath(t *testing.T) {
 	// Use a standard prime field.
 	f, err := NewPrimeField(65537)

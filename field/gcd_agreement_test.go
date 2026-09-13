@@ -33,7 +33,7 @@ func gcdPair(pr *PolyRing, rng *rand.Rand, degA int) (a, b *Polynomial) {
 // own output.
 //
 // PartialGCD used to overshoot by exactly one Euclidean step for every input large
-// enough to enter the half-GCD recursion (deg >= hgcdThreshold), because fastGCDRec
+// enough to enter the half-GCD recursion (deg >= hgcdThreshold), because fastGCDMatrix
 // asked hgcd to reach stopDegree-1 rather than stopDegree. One step too far still
 // decodes while the error count leaves slack, so the decoder only misbehaved at exactly
 // (n-k)/2 errors -- it silently corrected one fewer error than it advertised, at every

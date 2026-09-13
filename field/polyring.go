@@ -924,8 +924,8 @@ func (r *PolyRing) PartialGCD(a, b *Polynomial, stopDegree int) (gcd, x, y *Poly
 	r.ensureNotNttForm(A)
 	r.ensureNotNttForm(B)
 
-	// fastGCDRec is the recursive driver that uses HGCD to 'jump' through the sequence.
-	M := r.fastGCDRec(A, B, stopDegree)
+	// fastGCDMatrix is the driver that uses HGCD to 'jump' through the sequence.
+	M := r.fastGCDMatrix(A, B, stopDegree)
 
 	// Apply the final transition matrix to the original inputs to get the desired remainder.
 	AOut := M.mulVecFirst(r, A, B)
@@ -948,15 +948,13 @@ func (r *PolyRing) ensureNotNttForm(A *Polynomial) {
 	A.isNTT = false
 }
 
-/*
-fastGCDRec is the recursive engine for Fast GCD. It bridges the gap between
-the starting degrees and the target stopDegree using HGCD for large steps.
+// fastGCDMatrix is the driver for Fast GCD. It bridges the gap between the starting
+// degrees and the target stopDegree using HGCD for the large step.
 
-Parameters:
-- a, b: Current polynomials in the sequence.
-- stopDegree: The degree boundary we are aiming to cross.
-*/
-func (r *PolyRing) fastGCDRec(a, b *Polynomial, stopDegree int) polyMatrix2x2 {
+// Parameters:
+// - a, b: Current polynomials in the sequence.
+// - stopDegree: The degree boundary we are aiming to cross.
+func (r *PolyRing) fastGCDMatrix(a, b *Polynomial, stopDegree int) polyMatrix2x2 {
 	// Base Case 1: Target reached.
 	aDeg := a.Degree()
 	if aDeg < stopDegree || b.Degree() < 0 {
@@ -972,35 +970,16 @@ func (r *PolyRing) fastGCDRec(a, b *Polynomial, stopDegree int) polyMatrix2x2 {
 	// the distance hgcd must cover to bring the sequence down to stopDegree.
 	reduceBy := aDeg - stopDegree
 
-	// 1. Half-GCD Recursive Step:
+	// 1. Half-GCD Step:
 	// Use HGCD to compute a matrix M that reduces degrees significantly.
 	M := r.hgcd(a, b, reduceBy)
 	aCur, bCur := M.MulVec(r, a, b)
 	r.trimTrailingZeros(aCur)
 	r.trimTrailingZeros(bCur)
 
-	// Check if the HGCD step was enough to reach the target stopDegree.
-	if aCur.Degree() < stopDegree || bCur.Degree() < 0 {
-		return M
-	}
-
-	// 2. Standard Euclidean Step:
-	// Perform exactly ONE division step: aCur = q*bCur + rem.
-	// This step is mandatory to ensure progress. Without it, the algorithm
-	// might call HGCD with the same parameters again, leading to an infinite loop.
-	q, rem := r.Div(aCur, bCur)
-	M = r.applyStep(M, q)
-
-	// After one division step, the pair is (bCur, rem).
-	// If bCur.Degree() < stopDegree, then bCur is the first remainder with degree < stopDegree.
-	if bCur.Degree() < stopDegree || rem.Degree() < 0 {
-		return M
-	}
-
-	// 3. Second Recursive Step:
-	// Continue the process on the remainder.
-	S := r.fastGCDRec(bCur, rem, stopDegree)
-	return S.Mul(r, M)
+	// hgcd stopped because it couldn't guarantee the next step would not cross stopDegree,
+	// so we revert to the iterative routine to complete the task.
+	return r.iterativePartialExtendedEuclideanMatrix(aCur, bCur, stopDegree, stopAtFirstBelow).Mul(r, M)
 }
 
 /*
