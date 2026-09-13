@@ -71,6 +71,14 @@ func FuzzGCDAgreement(fz *testing.F) {
 	// an empty coefficient slice against a single zero -- which Polynomial.Equals used
 	// to call unequal.
 	fz.Add(uint64(49), uint16(11), uint16(97))
+	// degA=349 stop=25: the half-GCD returned an associate of the true remainder rather
+	// than the remainder. Its second recursion built a matrix from polynomials shifted
+	// down by k2 and applied it to the unshifted pair, having advanced one degree further
+	// than the retained coefficients licensed; far enough that the last quotient
+	// depended on coefficients the shift had thrown away. The matrix that came back was
+	// not a transition matrix of the real sequence: it produced a pair whose second entry
+	// had higher degree than its first, which no consecutive remainders can.
+	fz.Add(uint64(170), uint16(347), uint16(375))
 
 	fz.Fuzz(func(t *testing.T, seed uint64, rawDegA, rawStop uint16) {
 		_, pr := divTestField(t)

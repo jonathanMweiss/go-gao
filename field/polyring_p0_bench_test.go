@@ -139,44 +139,6 @@ func oldDivNTT(r *PolyRing, a, b *Polynomial) (q, rem *Polynomial) {
 	return q, rem
 }
 
-func oldNttPartialExtendedEuclidean(r *PolyRing, a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial) {
-	A := a.Copy()
-	B := b.Copy()
-	A.isNTT, B.isNTT = false, false
-
-	x0 := makeConstantPoly(r.f, 1)
-	x1 := makeConstantPoly(r.f, 0)
-	y0 := makeConstantPoly(r.f, 0)
-	y1 := makeConstantPoly(r.f, 1)
-
-	tmp1 := &Polynomial{f: r.f}
-	tmp2 := &Polynomial{f: r.f}
-
-	for A.Degree() >= stopDegree {
-		if B.Degree() < 0 || len(B.inner) == 0 {
-			break
-		}
-
-		var q, rrem *Polynomial
-		if len(A.inner)+len(B.inner) >= nttMulThreshold {
-			q, rrem = oldDivNTT(r, A, B)
-		} else {
-			q, rrem = r.Div(A, B)
-		}
-		A, B = B, rrem
-
-		r.Mul(q, x1, tmp1)
-		r.Sub(x0, tmp1, tmp2)
-		x0, x1, tmp2 = x1, tmp2, x0
-
-		r.Mul(q, y1, tmp1)
-		r.Sub(y0, tmp1, tmp2)
-		y0, y1, tmp2 = y1, tmp2, y0
-	}
-
-	return A, x0, y0
-}
-
 func benchmarkPolys(tb testing.TB, dividendDegree, divisorDegree int) (*PolyRing, *Polynomial, *Polynomial) {
 	tb.Helper()
 
@@ -219,37 +181,6 @@ func BenchmarkDivNTTLarge_OldVsOptimized(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				_, _ = pr.divViaNTT(a, d)
-			}
-		})
-	}
-}
-
-func BenchmarkNttPartialEEALarge_OldVsOptimized(b *testing.B) {
-	cases := []struct {
-		dividend   int
-		divisor    int
-		stopDegree int
-	}{
-		{16384, 8192, 8192},
-	}
-
-	for _, tc := range cases {
-		name := fmt.Sprintf("degA=%d/degB=%d/stop=%d", tc.dividend, tc.divisor, tc.stopDegree)
-		b.Run(name+"/old", func(b *testing.B) {
-			pr, a, d := benchmarkPolys(b, tc.dividend, tc.divisor)
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				_, _, _ = oldNttPartialExtendedEuclidean(pr, a, d, tc.stopDegree)
-			}
-		})
-
-		b.Run(name+"/optimized", func(b *testing.B) {
-			pr, a, d := benchmarkPolys(b, tc.dividend, tc.divisor)
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				_, _, _ = pr.nttPartialExtendedEuclidean(a, d, tc.stopDegree)
 			}
 		})
 	}

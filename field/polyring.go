@@ -524,72 +524,6 @@ func (r *PolyRing) applyStep(M polyMatrix2x2, q *Polynomial) polyMatrix2x2 {
 	return polyMatrix2x2{a00: M.a10, a01: M.a11, a10: lo, a11: hi}
 }
 
-// partialExtendedEuclidean runs the extended Euclidean algorithm, stopping early.
-//
-// returns r= gcd(a,b), x, y such that ax + by = r.
-// where r.Degree() < stopDegree. For full GCD, use stopDegree=0.
-func (r *PolyRing) partialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial) {
-	// Work on local copies ensuring inputs aren't mutated.
-	A := a.Copy()
-	B := b.Copy()
-	degA := A.Degree()
-	degB := B.Degree()
-
-	// M is the matrix that begins as identity, and each iteration it is updated by left-multiplying the Bézout matrix of the current division step:
-	// M =  a00 a01 = 1 0
-	//      a10 a11   0 1
-	M := polyIdentity2x2(r.f)
-
-	// Reusable temporaries (avoid allocations).
-	tmp1 := &Polynomial{f: r.f} // holds q*M10 or q*M11
-	tmp2 := &Polynomial{f: r.f} // holds M00 - q*M10 or M01 - q*M11
-
-	// Bezout identity is GCD(A,B)= ax +by.
-	// letsdive into the iterative algorithm.
-	// Initially, we have A=a, B=b, M = I, so the invariant holds:
-	// | A |   | 1  0 |   | a |
-	// | B | = | 0  1 | * | b |
-	// In each step of the Euclidean algorithm, we perform the division $a = q \cdot b + r$, which implies $r = a - q \cdot b$.
-	// Thus,
-	// | B |   | 0  1 |   | a |   | b |
-	// | r | = |1  -q| *  | b | = | a - q*b |
-	// Thus,
-	// each step performs left-multiplication by the Bézout matrix of the current division step:
-	// | 0   1 |   | M00  M01 |   | M10            M11           |
-	// |1   -q | * | M10  M11 | = | M00 - q*M10    M01 - q*M11   |
-	for degA >= stopDegree {
-		// If B == 0, can't divide further.
-		if degB < 0 {
-			break
-		}
-
-		// A = q*B + r
-		q, rrem := r.Div(A, B)
-		A, B = B, rrem // GCD recursive step: gcd(A, B) = gcd(B,rrem)
-		degA, degB = degB, B.Degree()
-
-		// Performing the matrix update one part at a time, to reuse the same temporary
-		// for both x and y updates and avoid extra allocations.
-
-		// left matrix update: (M00, M10) = (M10, M00 - q*M10)
-		r.Mul(q, M.a10, tmp1)    // tmp1 = q * M10
-		r.Sub(M.a00, tmp1, tmp2) // tmp2 = M00 - q*M10
-		M.a00, M.a10, tmp2 = M.a10, tmp2, M.a00
-
-		// right update: (M01, M11) = (M11, M01 - q*M11)
-		r.Mul(q, M.a11, tmp1)    // tmp1 = q * M11
-		r.Sub(M.a01, tmp1, tmp2) // tmp2 = M01 - q*M11
-		M.a01, M.a11, tmp2 = M.a11, tmp2, M.a01
-	}
-
-	// Notice that in each step we updated A,B using the GCD step, so now B=0, A=GCD.
-	// we can extract the coeffiecnts x,y from the matrix M,
-	// since we maintained the invariant that A = M.a00*a + M.a01*b.
-	// Namely, A is the top-left position in our vector, which is the GCD,
-	// and M00, M01 are what we multiplied against a,b to get the result A.
-	return A, M.a00, M.a01
-}
-
 // rev reverses p into a window of exactly L coefficients: out[i] = p[L-1-i], with any
 // index outside p read as zero.
 //
@@ -941,53 +875,6 @@ func (r *PolyRing) mulSubInto(dst, a, q, b *Polynomial) {
 	r.trimTrailingZeros(dst)
 }
 
-// nttPartialExtendedEuclidean is partialExtendedEuclidean with the matrix bookkeeping
-// fused: it carries the transpose of the transition matrix so that each update is one
-// mulSubInto rather than a separate Mul and Sub into two temporaries.
-//
-// For the algorithm itself and the invariant it maintains, see partialExtendedEuclidean.
-//
-// Nothing reaches this from PartialGCD: below hgcdThreshold the recursion bottoms out
-// into iterativePartialExtendedEuclideanMatrix instead, which needs the matrix itself in
-// order to compose with the levels above it and so pays for a full 2x2 multiply per step.
-// Teaching that one the fused update is an open optimization, and this is the worked
-// version of it; both are held to partialExtendedEuclidean by the agreement tests.
-func (r *PolyRing) nttPartialExtendedEuclidean(a, b *Polynomial, stopDegree int) (gcd, x, y *Polynomial) {
-	// Work on local copies ensuring inputs aren't mutated (coeff domain expected).
-	A := a.Copy()
-	B := b.Copy()
-	A.isNTT, B.isNTT = false, false
-
-	M := polyIdentity2x2(r.f)
-
-	// Reusable temporaries (avoid allocations in the single-step path).
-	tmp := &Polynomial{f: r.f}
-
-	degA := A.Degree()
-	degB := B.Degree()
-
-	for degA >= stopDegree {
-		if degB < 0 || len(B.inner) == 0 {
-			break
-		}
-
-		// A = q*B + r
-		q, rrem := r.Div(A, B)
-		A, B = B, rrem // gcd(A,B) = gcd(B,rrem)
-		degA, degB = degB, B.Degree()
-
-		// left side
-		r.mulSubInto(tmp, M.a00, q, M.a01)
-		M.a00, M.a01, tmp = M.a01, tmp, M.a00
-
-		// right side
-		r.mulSubInto(tmp, M.a10, q, M.a11)
-		M.a10, M.a11, tmp = M.a11, tmp, M.a10
-	}
-
-	return A, M.a00, M.a10
-}
-
 /*
 Half-GCD (HGCD) Implementation and Fast Partial GCD
 
@@ -999,6 +886,10 @@ coefficients (the "high parts") to compute transition matrices.
 Terminology:
 - Euclidean sequence: The sequence of remainders r_0, r_1, ... where r_0=a, r_1=b.
 - Transition Matrix M: A 2x2 matrix such that [r_i, r_{i+1}]^T = M * [a, b]^T.
+- The pair: the two adjacent terms (r_i, r_{i+1}) the algorithm currently holds, which
+  is the whole of its state -- one step advances it to (r_{i+1}, r_{i+2}), and the
+  transition matrix records how far it has come. Degrees fall strictly along the
+  sequence, so the first entry (the "leading" one) always outranks the second.
 */
 
 // hgcdThreshold is the degree at which the half-GCD recursion bottoms out into the
@@ -1074,15 +965,16 @@ func (r *PolyRing) fastGCDRec(a, b *Polynomial, stopDegree int) polyMatrix2x2 {
 
 	// Base Case 2: Small polynomials, use iterative O(n^2) logic.
 	if aDeg < hgcdThreshold {
-		return r.iterativePartialExtendedEuclideanMatrix(a, b, stopDegree)
+		// iterative GCD, stops when the degree of the first remainder is below stopDegree.
+		return r.iterativePartialExtendedEuclideanMatrix(a, b, stopDegree, stopAtFirstBelow)
 	}
 
-	// computes the steps required to reduce the degree of a to stopDegree.
-	steps := aDeg - stopDegree
+	// the distance hgcd must cover to bring the sequence down to stopDegree.
+	reduceBy := aDeg - stopDegree
 
 	// 1. Half-GCD Recursive Step:
 	// Use HGCD to compute a matrix M that reduces degrees significantly.
-	M := r.hgcd(a, b, steps)
+	M := r.hgcd(a, b, reduceBy)
 	aCur, bCur := M.MulVec(r, a, b)
 	r.trimTrailingZeros(aCur)
 	r.trimTrailingZeros(bCur)
@@ -1114,8 +1006,8 @@ func (r *PolyRing) fastGCDRec(a, b *Polynomial, stopDegree int) polyMatrix2x2 {
 /*
 The half-GCD (HGCD) algorithm is a divide-and-conquer method that computes a GCD transition matrix.
 HGCD returns a matrix M such that for (a', b') = M * (a, b),
-the degree of b' is reduced by at least 'm' relative to the original degree of a.
-That is: deg(b') < deg(a) - m.
+the degree of b' is reduced by at least 'reduceBy' relative to the original degree of a.
+That is: deg(b') < deg(a) - reduceBy.
 
 The HGCD algorithm relies on an insight (proven in `Modern Computer Algebra` by
 Joachim von zur Gathen and Jürgen Gerhard) that the high-order coefficients of
@@ -1127,45 +1019,55 @@ which are obtained by shifting the inputs to focus on the top coefficients. and 
 smaller multiplications and divisions as much as possible.
 
 Procedure:
-  - First Call: performs HGCD on the high parts of a and b, reducing the degree by about m/2.
+  - First Call: performs HGCD on the high parts of a and b, covering about half of reduceBy.
   - Bridge: It performs one division to ensure progress.
   - Second Call: It calls itself recursively on the new pair (b,remainder) to advance m further.
 
 The result
 This implements the Schönhage strategy of high-part recursion.
 */
-func (r *PolyRing) hgcd(a, b *Polynomial, m int) polyMatrix2x2 {
-	n := a.Degree()
+func (r *PolyRing) hgcd(a, b *Polynomial, reduceBy int) polyMatrix2x2 {
+	degA := a.Degree()
+	targetDeg := degA - reduceBy
+
 	// Base Case: target reduction reached or degree too small.
-	if b.Degree() < n-m || n < hgcdThreshold {
-		return r.iterativePartialExtendedEuclideanMatrix(a, b, n-m)
+	if b.Degree() < targetDeg || degA < hgcdThreshold {
+		// hgcd needs a matrix that gets us as close as possible to the target reduction,
+		// so we want it to return before it crosses the target (otherwise, the high-part recursion
+		return r.iterativePartialExtendedEuclideanMatrix(a, b, targetDeg, stopBeforeCrossing)
 	}
 
 	/*
 		Divide and Conquer:
-		To reduce by distance 'm', we first reduce by distance m/2.
-		We 'shift' the polynomials by k to only look at the top bits.
-		Shifting ensures that the recursive calls work on smaller polynomials (O(m) degrees)
-		while the results remain valid for the high-order coefficients of the full inputs.
+		To cover reduceBy, we first cover half of it.
+		We 'shift' the polynomials by firstShift to only look at the top bits.
+		Shifting ensures that the recursive calls work on smaller polynomials
+		(O(reduceBy) degrees) while the results remain valid for the high-order
+		coefficients of the full inputs.
 	*/
-	m1 := m / 2
-	k := n - 2*m1
-	if k < 0 {
-		k = 0
+	halfReduce := reduceBy / 2
+
+	// firstShift discards the low coefficients, retaining 2*halfReduce+1 of them -- the
+	// window the recursion is allowed to spend covering halfReduce.
+	firstShift := degA - 2*halfReduce
+	if firstShift < 0 {
+		firstShift = 0
 	}
 
 	// 1. First Recursive Call (on high parts):
-	// Reduction distance is m1.
-	R := r.hgcd(r.shiftRight(a, k), r.shiftRight(b, k), m1)
+	// Covers halfReduce of the distance.
+	R := r.hgcd(r.shiftRight(a, firstShift), r.shiftRight(b, firstShift), halfReduce)
 
 	// 2. Apply the transition matrix R to the full inputs.
 	aCur, bCur := R.MulVec(r, a, b)
 	r.trimTrailingZeros(aCur)
 	r.trimTrailingZeros(bCur)
 
-	bCurDeg := bCur.Degree()
-	// Check if the reduction target m has already been met.
-	if bCurDeg < n-m || bCurDeg < 0 {
+	// reachedDeg is how far down the sequence has come, so degA-reachedDeg is the
+	// distance covered so far.
+	reachedDeg := bCur.Degree()
+	// Check if the reduction target has already been met.
+	if reachedDeg < targetDeg || reachedDeg < 0 {
 		return R
 	}
 
@@ -1175,43 +1077,83 @@ func (r *PolyRing) hgcd(a, b *Polynomial, m int) polyMatrix2x2 {
 	M := r.applyStep(R, q)
 
 	remDeg := rem.Degree()
-	// Check if the reduction target m is met after division.
-	if remDeg < n-m || remDeg < 0 {
+	// Check if the reduction target is met after division.
+	if remDeg < targetDeg || remDeg < 0 {
 		return M
 	}
 
 	// 4. Second Recursive Call:
-	// Calculate the remaining distance m2 to reach the total target m.
-	n_new := bCur.Degree()
-	m2 := m - (n - n_new)
-	if m2 <= 0 {
+	// Whatever distance the first call and the division left uncovered.
+	restReduce := reduceBy - (degA - reachedDeg)
+	if restReduce <= 0 {
 		return M
 	}
-	// Recalculate shift relative to the new degree.
-	k2 := n_new - 2*m2
-	if k2 < 0 {
-		k2 = 0
+
+	// Recalculate the shift against the degree the pair now leads with.
+	secondShift := reachedDeg - 2*restReduce
+	if secondShift < 0 {
+		secondShift = 0
 	}
 
-	S := r.hgcd(r.shiftRight(bCur, k2), r.shiftRight(rem, k2), m2)
+	S := r.hgcd(r.shiftRight(bCur, secondShift), r.shiftRight(rem, secondShift), restReduce)
+
 	return S.Mul(r, M)
 }
 
-/*
-iterativePartialExtendedEuclideanMatrix is the O(n^2) fallback.
-It computes the transition matrix M until deg(a) < stopDegree.
-*/
-func (r *PolyRing) iterativePartialExtendedEuclideanMatrix(a, b *Polynomial, stopDegree int) polyMatrix2x2 {
+// A gcdStop says where the Euclidean loop leaves the pair, relative to stopDegree.
+type gcdStop int
+
+const (
+	// stopAtFirstBelow runs until the leading entry has dropped below stopDegree. It is
+	// what a caller asking for the answer itself wants.
+	stopAtFirstBelow gcdStop = iota
+
+	// stopBeforeCrossing stops one step earlier, leaving the leading entry at or above
+	// stopDegree.
+	//
+	// hgcd needs this. It computes its matrices from polynomials shifted down by k and
+	// then applies them to the unshifted pair, and that transfer is licensed only while
+	// the matrix has advanced the sequence no further than the retained coefficients
+	// determine. Past that point the last quotient depends on coefficients the shift
+	// discarded.
+	//
+	// Stopping at the first remainder below stopDegree always overruns that licence, so
+	// hgcd stops short of it.
+	stopBeforeCrossing
+)
+
+// euclidStep advances (A, B) by one division and folds the quotient into M.
+func (r *PolyRing) euclidStep(
+	A, B *Polynomial, M polyMatrix2x2,
+) (*Polynomial, *Polynomial, polyMatrix2x2) {
+	q, rem := r.Div(A, B)
+
+	return B, rem, r.applyStep(M, q)
+}
+
+// iterativePartialExtendedEuclideanMatrix is the O(n^2) fallback. It computes the
+// transition matrix M for the Euclidean sequence of (a, b), stopping on the side of
+// stopDegree that stop selects.
+//
+// It is the classical Euclidean algorithm, differing only in what it keeps: the Bezout
+// coefficients are left in the matrix instead of being read out of it, so the levels
+// above can compose this one with theirs.
+func (r *PolyRing) iterativePartialExtendedEuclideanMatrix(
+	a, b *Polynomial, stopDegree int, stop gcdStop,
+) polyMatrix2x2 {
 	A := a.Copy()
 	B := b.Copy()
 	M := polyIdentity2x2(r.f)
 
-	for A.Degree() >= stopDegree && B.Degree() >= 0 {
-		q, rem := r.Div(A, B)
-		A, B = B, rem
-
-		M = r.applyStep(M, q)
+	for B.Degree() >= stopDegree && B.Degree() >= 0 {
+		A, B, M = r.euclidStep(A, B, M)
 	}
+
+	// check if we need one more step.
+	if stop == stopAtFirstBelow && A.Degree() >= stopDegree && B.Degree() >= 0 {
+		_, _, M = r.euclidStep(A, B, M)
+	}
+
 	return M
 }
 
