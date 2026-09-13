@@ -675,3 +675,110 @@ func TestMulAliasedDestination(t *testing.T) {
 		a.True(want.Equals(rhs), "degree %d, c == b: got %s, want %s", degree, rhs, want)
 	}
 }
+
+// NewPolynomial reduces what it is handed, so every coefficient inside a polynomial is
+// already a field element. Before that, Add reduced defensively while Sub, Evaluate and
+// Degree did not, so an out-of-range coefficient gave different answers depending on
+// which operation saw it.
+func TestNewPolynomialReducesInput(t *testing.T) {
+	a := assert.New(t)
+
+	const prime = 65537
+	f, err := NewPrimeField(prime)
+	a.NoError(err)
+
+	r := NewPolyRing(f)
+
+	p := r.NewPolynomial([]uint64{prime + 5, 2*prime + 7, prime}, false)
+	want := r.NewPolynomial([]uint64{5, 7, 0}, false)
+
+	a.True(want.Equals(p), "coefficients not reduced: %s", p)
+	a.Equal(1, p.Degree(), "a coefficient equal to the modulus must count as zero")
+
+	q := r.NewPolynomial([]uint64{3, 1}, false)
+	for name, op := range map[string]func(x, y, out *Polynomial){
+		"Add": r.Add, "Sub": r.Sub, "Mul": r.Mul,
+	} {
+		gotRaw, gotReduced := &Polynomial{}, &Polynomial{}
+		op(p, q, gotRaw)
+		op(want, q, gotReduced)
+		a.True(gotReduced.Equals(gotRaw), "%s disagrees: %s vs %s", name, gotRaw, gotReduced)
+	}
+
+	a.Equal(r.Evaluate(want, 9), r.Evaluate(p, 9), "Evaluate disagrees")
+}
+
+// assertReduced fails if any coefficient lies outside [0, modulus).
+//
+// Every polynomial in the package is meant to satisfy this. NewPolynomial and
+// makeConstantPoly reduce what they are handed, and the field operations return reduced
+// values for reduced inputs, so anything built out of them inherits it -- which is why
+// the internal &Polynomial{...} literals need no reduction of their own.
+func assertReduced(t *testing.T, p *Polynomial, what string) {
+	t.Helper()
+
+	mod := p.f.Modulus()
+	for i, v := range p.NoCopySlice() {
+		if v >= mod {
+			t.Fatalf("%s: coefficient %d is %d, which is not reduced mod %d", what, i, v, mod)
+		}
+	}
+}
+
+// FuzzCoefficientsStayReduced feeds deliberately out-of-range coefficients through the
+// one entry point that is supposed to sanitize them, then checks that no operation
+// hands back a coefficient outside the field.
+func FuzzCoefficientsStayReduced(fz *testing.F) {
+	fz.Add(uint64(1), uint8(3), uint8(2))
+	fz.Add(uint64(2), uint8(40), uint8(9))
+	fz.Add(uint64(3), uint8(1), uint8(1))
+
+	fz.Fuzz(func(t *testing.T, seed uint64, aLen, bLen uint8) {
+		f, err := NewPrimeField(65537)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		r := NewPolyRing(f)
+		rng := rand.New(rand.NewSource(int64(seed)))
+
+		raw := func(n int) []uint64 {
+			out := make([]uint64, n)
+			for i := range out {
+				out[i] = rng.Uint64() // deliberately unreduced
+			}
+
+			return out
+		}
+
+		a := r.NewPolynomial(raw(int(aLen)%48+1), false)
+		b := r.NewPolynomial(raw(int(bLen)%24+1), false)
+		assertReduced(t, a, "NewPolynomial(a)")
+		assertReduced(t, b, "NewPolynomial(b)")
+
+		for name, op := range map[string]func(x, y, out *Polynomial){
+			"Add": r.Add, "Sub": r.Sub, "Mul": r.Mul,
+		} {
+			out := &Polynomial{}
+			op(a, b, out)
+			assertReduced(t, out, name)
+		}
+
+		scaled := &Polynomial{}
+		r.MulScalar(a, rng.Uint64(), scaled)
+		assertReduced(t, scaled, "MulScalar")
+
+		if b.Degree() >= 0 {
+			q, rem := r.Div(a, b)
+			assertReduced(t, q, "Div quotient")
+			assertReduced(t, rem, "Div remainder")
+		}
+
+		if a.Degree() >= 0 && b.Degree() >= 0 {
+			gcd, x, y := r.PartialGCD(a, b, 0)
+			assertReduced(t, gcd, "PartialGCD gcd")
+			assertReduced(t, x, "PartialGCD x")
+			assertReduced(t, y, "PartialGCD y")
+		}
+	})
+}

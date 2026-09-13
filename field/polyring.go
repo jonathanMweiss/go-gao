@@ -66,6 +66,10 @@ func (r *PolyRing) NewPolynomial(inner []uint64, isPointRepresentation bool) *Po
 		inner = []uint64{0}
 	}
 
+	for i, v := range inner {
+		inner[i] = r.f.Reduce(v)
+	}
+
 	return &Polynomial{
 		inner: inner,
 		isNTT: isPointRepresentation,
@@ -224,13 +228,13 @@ func (r *PolyRing) Add(a, b, c *Polynomial) {
 	var av, bv uint64
 	for i := 0; i < n; i++ {
 		if i < alen {
-			av = r.f.Reduce(a.inner[i])
+			av = a.inner[i]
 		} else {
 			av = 0
 		}
 
 		if i < blen {
-			bv = r.f.Reduce(b.inner[i])
+			bv = b.inner[i]
 		} else {
 			bv = 0
 		}
@@ -443,7 +447,7 @@ func (r *PolyRing) divSchoolbook(a, b *Polynomial, n, m int) (q *Polynomial, rem
 }
 
 func makeConstantPoly(f Field, u uint64) *Polynomial {
-	return &Polynomial{f: f, inner: []uint64{u}, isNTT: false}
+	return &Polynomial{f: f, inner: []uint64{f.Reduce(u)}, isNTT: false}
 }
 
 func polyZero(f Field) *Polynomial {
@@ -543,9 +547,7 @@ func (r *PolyRing) rev(p *Polynomial, L int) *Polynomial {
 	// specifically not using Copy(): revInPlace below requires that out.inner be exactly L
 	// and Copy() would preserve p's length, which may be shorter.
 	out.inner = make([]uint64, L)
-	for i, v := range p.inner[:min(L, len(p.inner))] {
-		out.inner[i] = r.f.Reduce(v)
-	}
+	copy(out.inner, p.inner)
 
 	revInPlace(out, L)
 
@@ -707,7 +709,7 @@ func (r *PolyRing) seriesInverse(b *Polynomial, k int) *Polynomial {
 	//
 	// t and next trade places every iteration, so which of the two is returned depends on
 	// the number of steps. tmp never escapes.
-	b0 := r.f.Reduce(b.inner[0])
+	b0 := b.inner[0]
 	t := &Polynomial{f: r.f, isNTT: false, inner: make([]uint64, 1, k)}
 	t.inner[0] = r.f.Inverse(b0)
 	next := &Polynomial{f: r.f, isNTT: false, inner: make([]uint64, 0, k)}
