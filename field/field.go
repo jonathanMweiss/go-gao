@@ -206,11 +206,14 @@ func (f *PrimeField) Neg(e uint64) uint64 {
 
 // Sub returns a - b modulo the field prime.
 func (f *PrimeField) Sub(a, b uint64) uint64 {
+	prime := f.prime
+
+	tmp := a - b
 	if a < b {
-		return f.prime - (b - a)
+		tmp += prime
 	}
 
-	return a - b
+	return tmp
 }
 
 // Equals reports whether a and b are the same field element.
