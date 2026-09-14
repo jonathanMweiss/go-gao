@@ -282,8 +282,10 @@ func (gao *Code) Decode(ys []uint64, erasedAt ...int) ([]uint64, error) {
 // comparing what it encoded against what it decoded would see a spurious mismatch.
 // Callers have already checked deg(f) < k, so nothing is truncated here.
 func (gao *Code) messageOf(f *field.Polynomial) []uint64 {
-	msg := make([]uint64, gao.K())
-	copy(msg, f.ToSlice())
+	msg := f.ToSlice()
+	if len(msg) < gao.K() {
+		msg = append(msg, make([]uint64, gao.K()-len(msg))...)
+	}
 
 	return msg
 }
@@ -358,6 +360,10 @@ func (gao *Code) decodeGeneric(ys []uint64, xs []uint64, erased []int) (*field.P
 		return f, r, nil
 	}
 
+	if f, r, ok := gao.erasureOnlyMessage(g1, S); ok {
+		return f, r, nil
+	}
+
 	return gao.recoverMessage(g1, S, stopDegree)
 }
 
@@ -402,7 +408,68 @@ func (gao *Code) decodeNTT(ys, xs []uint64, erased []int) (*field.Polynomial, *f
 		return f, r, nil
 	}
 
+	if f, r, ok := gao.erasureOnlyMessage(g1, S); ok {
+		return f, r, nil
+	}
+
 	return gao.recoverMessage(g1, S, stopDegree)
+}
+
+// erasureOnlyMessage recovers the message directly from g1 and S, skipping the partial
+// GCD, when the word carries erasures but no errors.
+//
+// Suppose by contradiction that one of the points has an error and deg(g1) < K+s.
+// the following proof will reach a contradiction (meaning that if deg(g1) < k+s, there are no errors).
+// denote g1(x_i)= (f(x_i) + e_i)*S(x_i); so we have e_i*S(x_i) = g1(x_i)-f(x_i)*S(x_i).
+// The right-hand side is one polynomial evaluated at x_i, so name it D = g1 - f*S:
+//
+//	D(x_i) = g1(x_i) - f(x_i)*S(x_i)
+//	       = (f(x_i) + e_i)*S(x_i) - f(x_i)*S(x_i)
+//	       = e_i*S(x_i)
+//
+// D vanishes wherever the word is clean, which is nearly everywhere:
+// e_i=0 when there are no errors (n-t such locations) and S(x_i)=0 when there are erasures.
+// So with t symbols in error, D has at least n-t distinct roots,
+// and is therefore either zero or of degree >= n-t.
+//
+// Now suppose the test below passes, deg(g1) < K+s, writing s=deg(S) for the number of
+// erasures. That inequality is strict and degrees are integers, so deg(g1) <= K+s-1. A
+// message polynomial carries K coefficients, deg(f) <= K-1, so deg(f*S) <= K-1+s too.
+// D is their difference, hence deg(D) <= K+s-1.
+//
+// from the decoder's budget,
+// 2t+s <= n-K, we have t <= (n-K-s)/2 and hence
+//
+//	n-t >= n-(n-K-s)/2 = (2n-n+K+s)/2 = (n+K+s)/2 >= K+s
+//
+// the last step because n >= K+s, which the budget gives at t=0 and checkErasures
+// enforces outright: (n+K+s)/2 >= (K+s+K+s)/2 = K+s.
+// So a nonzero D would have deg(D) >= n-t >= K+s.
+//
+// The assumed error sits at a non-erased point: there e_j != 0 and S(x_j) != 0, so
+// D(x_j) != 0 and D is nonzero; leaving deg(D) >= K+s and deg(D) <= K+s-1. Absurd,
+// so no such error exists, and D = 0 gives g1 = f*S: the division below returns f.
+//
+// The contrapositive is the guard itself: a word carrying t >= 1 errors has
+// deg(g1) >= K+s, fails the test, and goes on to the partial GCD. Nothing error-free is
+// turned away either, since deg(f*S) <= K-1+s < n means the mod g0 never bites.
+func (gao *Code) erasureOnlyMessage(g1, S *field.Polynomial) (f, r *field.Polynomial, ok bool) {
+	if S == nil {
+		return nil, nil, false
+	}
+
+	if g1.Degree() >= gao.K()+S.Degree() {
+		return nil, nil, false
+	}
+
+	f, r = gao.pr.Div(g1, S)
+	// Scaling by S zeroed the erased positions, so g1 vanishes there and S always divides it.
+	// should never happen, but check anyway.
+	if !r.IsZero() {
+		return nil, nil, false
+	}
+
+	return f, r, true
 }
 
 // recoverMessage runs the partial GCD and strips the locators from what it returns.
