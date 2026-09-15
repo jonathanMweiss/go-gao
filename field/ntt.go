@@ -108,18 +108,20 @@ func (r *PolyRing) NttForward(a *Polynomial) error {
 	}
 
 	f := r.f
+	inner := a.inner
 
 	// Stages: m = 2,4,8,...,n  with precomputed ws per stage.
 	for s, m := 0, 2; m <= n; s, m = s+1, m<<1 {
 		half := m >> 1
-		ws := ts.fwd[s] // length = half
+		ws := ts.fwd[s][:half] // length = half
 		for k := 0; k < n; k += m {
 			// breadth-first butterflies
-			for j := 0; j < half; j++ {
-				u := a.inner[k+j]
-				t := f.Mul(ws[j], a.inner[k+j+half])
-				a.inner[k+j] = f.Add(u, t)
-				a.inner[k+j+half] = f.Sub(u, t)
+			lo, hi := inner[k:k+half], inner[k+half:k+half+half]
+			for j, w := range ws {
+				u := lo[j]
+				t := f.Mul(w, hi[j])
+				lo[j] = f.Add(u, t)
+				hi[j] = f.Sub(u, t)
 			}
 		}
 	}
@@ -164,23 +166,25 @@ func (r *PolyRing) nttBackwardNoTrim(a *Polynomial) error {
 	}
 
 	f := r.f
+	inner := a.inner
 	// Inverse butterflies use inverse stage twiddles
 	for s, m := 0, 2; m <= n; s, m = s+1, m<<1 {
 		half := m >> 1
-		ws := ts.inv[s]
+		ws := ts.inv[s][:half]
 		for k := 0; k < n; k += m {
-			for j := 0; j < half; j++ {
-				u := a.inner[k+j]
-				t := f.Mul(ws[j], a.inner[k+j+half])
-				a.inner[k+j] = f.Add(u, t)
-				a.inner[k+j+half] = f.Sub(u, t)
+			lo, hi := inner[k:k+half], inner[k+half:k+half+half]
+			for j, w := range ws {
+				u := lo[j]
+				t := f.Mul(w, hi[j])
+				lo[j] = f.Add(u, t)
+				hi[j] = f.Sub(u, t)
 			}
 		}
 	}
 
 	// scale by n^{-1}
-	for i := 0; i < n; i++ {
-		a.inner[i] = f.Mul(a.inner[i], ts.nInv)
+	for i, v := range inner {
+		inner[i] = f.Mul(v, ts.nInv)
 	}
 
 	a.isNTT = false
