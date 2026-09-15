@@ -3,7 +3,11 @@
 
 package field
 
-import "errors"
+import (
+	"errors"
+	"math/bits"
+	"slices"
+)
 
 type twiddleSet struct {
 	// For each stage s (m = 2<<s), fwd[s] (and inv[s]) has length m/2
@@ -98,7 +102,9 @@ func (r *PolyRing) NttForward(a *Polynomial) error {
 		return errors.New("NTTForward: length must be a power of two")
 	}
 
-	// Bit-reversal permutation (in place; allocation-free)
+	// Put the coefficients in the order nttRecursive's leaves would be in, so that the
+	// stages below can work upward from there. See nttRecursive for why that order is
+	// the bit-reversal of the natural one.
 	bitReverseInPlace(a.inner)
 
 	// Twiddles per stage
@@ -110,13 +116,29 @@ func (r *PolyRing) NttForward(a *Polynomial) error {
 	f := r.f
 	inner := a.inner
 
-	// Stages: m = 2,4,8,...,n  with precomputed ws per stage.
+	// One level of nttRecursive's tree per pass, deepest level first: m is the size of
+	// the subproblem this stage finishes, so stage 0 merges single coefficients into
+	// pairs and the last stage merges the two halves of the whole array. Where the
+	// recursion reaches a level by returning into it, this sweeps levels bottom-up:
+	// a merge needs only its own two children, never its cousins.
 	for s, m := 0, 2; m <= n; s, m = s+1, m<<1 {
 		half := m >> 1
-		ws := ts.fwd[s][:half] // length = half
+		// s used to index the "level" of twiddles.
+		// omegas for this stage.
+		ws := ts.fwd[s][:half]
+
+		// k helps us choose the two halves to merge.
+		// The permutation above is what leaves each subproblem contiguous, so [k, k+m) is
+		// exactly one node's territory.
 		for k := 0; k < n; k += m {
-			// breadth-first butterflies
+			// The halves are the two children, each already transformed by the
+			// previous stage: lo is nttRecursive's yeven, hi its yodd.
 			lo, hi := inner[k:k+half], inner[k+half:k+half+half]
+
+			// The merge, written over the children in place -- lo[j] becomes y[j] and
+			// hi[j] becomes y[j+half]. Both operands are read into u and t before
+			// either write, because output and input share this memory: assigning
+			// lo[j] first would clobber the value the next line still needs.
 			for j, w := range ws {
 				u := lo[j]
 				t := f.Mul(w, hi[j])
@@ -156,7 +178,7 @@ func (r *PolyRing) nttBackwardNoTrim(a *Polynomial) error {
 		return errors.New("NTTBackward: length must be a power of two")
 	}
 
-	// Bit-reversal permutation (in place)
+	// Bit-reversal permutation
 	bitReverseInPlace(a.inner)
 
 	// Twiddles per stage
@@ -167,7 +189,10 @@ func (r *PolyRing) nttBackwardNoTrim(a *Polynomial) error {
 
 	f := r.f
 	inner := a.inner
-	// Inverse butterflies use inverse stage twiddles
+
+	// The same three loops as NttForward -- level, node, merge; see there for what each
+	// one walks -- run over the inverse stage roots. That computes n times the inverse
+	// transform, which the scaling below divides out.
 	for s, m := 0, 2; m <= n; s, m = s+1, m<<1 {
 		half := m >> 1
 		ws := ts.inv[s][:half]
@@ -191,26 +216,88 @@ func (r *PolyRing) nttBackwardNoTrim(a *Polynomial) error {
 	return nil
 }
 
+// bitReverseInPlace rearranges the elements of xs in place according to the "bit-reversal permutation".
+// i.e., similar to FFT's element ordering [0,1,2,3,4,5,6,7] -> [0,4,2,6,1,5,3,7].
+// this function does so by finding for each index i its new position j by reversing the bits of i,
+// and swapping xs[i] with xs[j] if i < j. It does this in O(n) time and O(1) space.
+//
+// For example, if xs has length 8, the indices 0..7 in binary are:
+// 000, 001, 010, 011, 100, 101, 110, 111
+// and their bit-reversals are:
+// 000, 100, 010, 110, 001, 101, 011, 111
+// so the elements of xs are rearranged to match these new indices.
+//
+// this is needed to run NTT from the bottom up, as the Cooley-Tukey algorithm requires.
 func bitReverseInPlace(xs []uint64) {
 	n := len(xs)
 	if n <= 1 {
 		return
 	}
-	// Compute number of bits needed
-	bits := 0
-	for (1 << bits) < n {
-		bits++
-	}
-	j := 0
+
+	shift := uint(64-bits.TrailingZeros(uint(n))) & 63
 	for i := 1; i < n-1; i++ {
-		bit := n >> 1
-		for j&bit != 0 {
-			j &= ^bit
-			bit >>= 1
-		}
-		j |= bit
+		j := int(bits.Reverse64(uint64(i))>>shift) & (n - 1)
 		if i < j {
 			xs[i], xs[j] = xs[j], xs[i]
 		}
 	}
+}
+
+// nttRecursive is the textbook recursive NTT, kept as the reference the iterative
+// [PolyRing.NttForward] and [PolyRing.NttBackward] are derived from.
+//
+// len(a) must be a power of two that the field admits a transform of; anything else is
+// a programming error and panics.
+func nttRecursive(f Field, a []uint64) []uint64 {
+	n := len(a)
+	if n <= 1 {
+		return append([]uint64(nil), a...)
+	}
+
+	w, err := RootOfUnity(f, uint64(n))
+	if err != nil {
+		panic("nttRecursive: " + err.Error())
+	}
+
+	half := n >> 1
+
+	// split coeffs into even and odd.
+	even := make([]uint64, half)
+	odd := make([]uint64, half)
+	for i := range half {
+		even[i] = a[2*i]
+		odd[i] = a[2*i+1]
+	}
+
+	yeven := nttRecursive(f, even)
+	yodd := nttRecursive(f, odd)
+
+	y := make([]uint64, n)
+	for k := range half {
+		// w^(k+n/2) = -w^k, so the upper half is the same product subtracted: that
+		// sign is why one pass over half the indices fills all n, and it is what the
+		// stage loops above write as lo[j], hi[j] = u+t, u-t.
+		wk := f.Pow(w, uint64(k))
+		y[k] = f.Add(yeven[k], f.Mul(wk, yodd[k]))
+		y[k+half] = f.Sub(yeven[k], f.Mul(wk, yodd[k]))
+	}
+
+	return y
+}
+
+func nttRecursiveInverse(f Field, a []uint64) []uint64 {
+	if len(a) <= 1 {
+		return append([]uint64(nil), a...)
+	}
+
+	y := nttRecursive(f, a)
+	slices.Reverse(y[1:])
+
+	// normalize.
+	nInv := f.Inverse(uint64(len(a)))
+	for i, v := range y {
+		y[i] = f.Mul(v, nInv)
+	}
+
+	return y
 }

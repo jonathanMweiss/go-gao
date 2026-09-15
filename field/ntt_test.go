@@ -4,6 +4,7 @@
 package field
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -76,4 +77,44 @@ func TestPolyMult(t *testing.T) {
 		}
 		a.True(regMulRes.Equals(nttRes))
 	}
+}
+
+// TestNTTRecursiveMatchesIterative holds the in-place transforms to the recursive
+// reference they were derived from. A reference nothing checks drifts from the code it
+// is supposed to explain, so both directions are compared at every size the field
+// admits. The two reach their roots by different routes -- the reference looks one up
+// per node, the ring squares a cached psi down the stages -- so agreeing is a real
+// check on both.
+func TestNTTRecursiveMatchesIterative(t *testing.T) {
+	a := assert.New(t)
+	f, err := NewPrimeField(65537)
+	a.NoError(err)
+
+	pr := NewPolyRing(f)
+
+	for i := range 8 {
+		n := 1 << (i + 1)
+
+		p := randomPolynomial(f, 4242+uint64(i), n)
+		coeffs := append([]uint64(nil), p.NoCopySlice()...)
+
+		// Forward: the reference evaluates at the powers of w, and the stage loops
+		// must land on the same values in the same order.
+		a.NoError(pr.NttForward(p))
+		a.Equal(nttRecursive(f, coeffs), p.NoCopySlice(), "forward, n=%d", n)
+
+		// Backward: both invert the same evaluations onto the coefficients they came
+		// from.
+		evals := append([]uint64(nil), p.NoCopySlice()...)
+
+		a.NoError(pr.NttBackward(p))
+		a.Equal(coeffs, nttRecursiveInverse(f, evals), "backward, n=%d", n)
+		a.Equal(coeffs, p.NoCopySlice(), "backward, n=%d", n)
+	}
+}
+
+func TestBitReverseInPlace(t *testing.T) {
+	a := []uint64{0, 1, 2, 3, 4, 5, 6, 7}
+	bitReverseInPlace(a)
+	fmt.Println(a)
 }
