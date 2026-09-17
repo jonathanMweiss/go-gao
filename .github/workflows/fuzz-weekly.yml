@@ -45,7 +45,9 @@ jobs:
       # cache on go.sum, which has nothing to do with how far the corpus has grown.
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          # 1.27 carries the fix for go.dev/issue/75804, which otherwise reports a
+          # spurious failure when fuzztime expires. Not backported to 1.25 or 1.26.
+          go-version: '1.27'
           cache: false
 
       - name: Locate the build cache

@@ -11,12 +11,25 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # CODECOV_TOKEN is an environment secret, and a job cannot read one without
+    # naming its environment. go-gao-coverage carries no protection rules, so this
+    # gates nothing.
+    environment: go-gao-coverage
+    strategy:
+      fail-fast: false
+      matrix:
+        # 1.25 is the floor go.mod declares, so it is tested rather than assumed;
+        # 1.27 is what the code is developed against. The compiler pins the language
+        # version from go.mod and vet's stdversion analyser rejects too-new library
+        # symbols, so what this pair adds is coverage of runtime and codegen
+        # differences, which neither of those catches.
+        goversion: ['1.25', '1.27']
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: ${{ matrix.goversion }}
           cache: true
 
       - name: Verify formatting
@@ -46,9 +59,12 @@ jobs:
       # fail_ci_if_error stays false: a Codecov outage is not a reason to redden a
       # build whose tests passed.
       - name: Upload coverage
+        # One report per commit; the matrix legs cover identical statements.
+        if: matrix.goversion == '1.27'
         uses: codecov/codecov-action@v5
         with:
           files: coverage.out
+          token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
       # Only this package, and only under the detector -- not ./... .
@@ -71,7 +87,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.27'
           cache: true
 
       # `unused` here catches dead declarations that `go vet` cannot see: it only
@@ -80,15 +96,21 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
+          # Built here rather than downloaded: the published binary is compiled with
+          # an older Go and crashes reading 1.27 export data.
+          install-mode: goinstall
 
   fuzz:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      # 1.27 is required, not merely preferred: fuzzing on 1.25 and 1.26 hits
+      # go.dev/issue/75804, where an error arriving between the fuzztime deadline and
+      # the workers' cancellation is misreported as a finding. Not backported.
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.27'
           cache: true
 
       # The committed testdata/ corpus runs as ordinary tests on every `go test`.
@@ -113,7 +135,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.27'
           cache: true
 
       - name: govulncheck
