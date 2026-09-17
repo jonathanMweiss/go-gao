@@ -12,9 +12,14 @@ import (
 type twiddleSet struct {
 	// For each stage s (m = 2<<s), fwd[s] (and inv[s]) has length m/2
 	// holding w^j where w = psi^(n/m) for forward, and w = psiInv^(n/m) for inverse.
-	fwd  [][]uint64
-	inv  [][]uint64
-	nInv uint64 // inverse of n (for inverse NTT scaling)
+	fwd [][]uint64
+	inv [][]uint64
+	// fwdShoup[s][j] and invShoup[s][j] are the Shoup companions of fwd[s][j] and
+	// inv[s][j], and nInvShoup is nInv's; see [PrimeField.mulShoup].
+	fwdShoup  [][]uint64
+	invShoup  [][]uint64
+	nInv      uint64 // inverse of n (for inverse NTT scaling)
+	nInvShoup uint64
 }
 
 func (r *PolyRing) getTwiddles(n int) (*twiddleSet, error) {
@@ -27,10 +32,14 @@ func (r *PolyRing) getTwiddles(n int) (*twiddleSet, error) {
 
 	// Build outside lock
 	if n <= 1 {
+		nInv := r.f.Inverse(uint64(n))
 		ts := &twiddleSet{
-			fwd:  [][]uint64{},
-			inv:  [][]uint64{},
-			nInv: r.f.Inverse(uint64(n)),
+			fwd:       [][]uint64{},
+			inv:       [][]uint64{},
+			fwdShoup:  [][]uint64{},
+			invShoup:  [][]uint64{},
+			nInv:      nInv,
+			nInvShoup: r.f.shoupFactor(nInv),
 		}
 
 		r.mu.Lock()
@@ -47,6 +56,8 @@ func (r *PolyRing) getTwiddles(n int) (*twiddleSet, error) {
 
 	var fwd [][]uint64
 	var inv [][]uint64
+	var fwdShoup [][]uint64
+	var invShoup [][]uint64
 
 	f := r.f
 	// stages: m = 2,4,8,...,n  => stage index s = 0..(log2(n)-1)
@@ -57,24 +68,34 @@ func (r *PolyRing) getTwiddles(n int) (*twiddleSet, error) {
 
 		rowF := make([]uint64, half)
 		rowI := make([]uint64, half)
+		rowFS := make([]uint64, half)
+		rowIS := make([]uint64, half)
 
 		wF := uint64(1)
 		wI := uint64(1)
 		for j := 0; j < half; j++ {
 			rowF[j] = wF
 			rowI[j] = wI
+			rowFS[j] = f.shoupFactor(wF)
+			rowIS[j] = f.shoupFactor(wI)
 			wF = f.Mul(wF, wmF)
 			wI = f.Mul(wI, wmI)
 		}
 
 		fwd = append(fwd, rowF)
 		inv = append(inv, rowI)
+		fwdShoup = append(fwdShoup, rowFS)
+		invShoup = append(invShoup, rowIS)
 	}
 
+	nInv := r.f.Inverse(uint64(n))
 	ts := &twiddleSet{
-		fwd:  fwd,
-		inv:  inv,
-		nInv: r.f.Inverse(uint64(n)),
+		fwd:       fwd,
+		inv:       inv,
+		fwdShoup:  fwdShoup,
+		invShoup:  invShoup,
+		nInv:      nInv,
+		nInvShoup: f.shoupFactor(nInv),
 	}
 
 	r.mu.Lock()
@@ -126,6 +147,7 @@ func (r *PolyRing) NttForward(a *Polynomial) error {
 		// s used to index the "level" of twiddles.
 		// omegas for this stage.
 		ws := ts.fwd[s][:half]
+		wsp := ts.fwdShoup[s][:len(ws)]
 
 		// k helps us choose the two halves to merge.
 		// The permutation above is what leaves each subproblem contiguous, so [k, k+m) is
@@ -141,7 +163,7 @@ func (r *PolyRing) NttForward(a *Polynomial) error {
 			// lo[j] first would clobber the value the next line still needs.
 			for j, w := range ws {
 				u := lo[j]
-				t := f.Mul(w, hi[j])
+				t := f.mulShoup(w, wsp[j], hi[j])
 				lo[j] = f.Add(u, t)
 				hi[j] = f.Sub(u, t)
 			}
@@ -196,11 +218,12 @@ func (r *PolyRing) nttBackwardNoTrim(a *Polynomial) error {
 	for s, m := 0, 2; m <= n; s, m = s+1, m<<1 {
 		half := m >> 1
 		ws := ts.inv[s][:half]
+		wsp := ts.invShoup[s][:len(ws)]
 		for k := 0; k < n; k += m {
 			lo, hi := inner[k:k+half], inner[k+half:k+half+half]
 			for j, w := range ws {
 				u := lo[j]
-				t := f.Mul(w, hi[j])
+				t := f.mulShoup(w, wsp[j], hi[j])
 				lo[j] = f.Add(u, t)
 				hi[j] = f.Sub(u, t)
 			}
@@ -209,7 +232,7 @@ func (r *PolyRing) nttBackwardNoTrim(a *Polynomial) error {
 
 	// scale by n^{-1}
 	for i, v := range inner {
-		inner[i] = f.Mul(v, ts.nInv)
+		inner[i] = f.mulShoup(ts.nInv, ts.nInvShoup, v)
 	}
 
 	a.isNTT = false

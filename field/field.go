@@ -154,6 +154,44 @@ func (f *PrimeField) Mul(a, b uint64) uint64 {
 	return fieldMul(a, b, f.prime)
 }
 
+// shoupFactor returns floor(w * 2^64 / p), the companion value [PrimeField.mulShoup]
+// needs for a fixed multiplier w. It requires w < p, so the quotient fits in 64 bits.
+func (f *PrimeField) shoupFactor(w uint64) uint64 {
+	q, _ := bits.Div64(w, 0, f.prime)
+
+	return q
+}
+
+// mulShoup returns w * x (mod p).
+// every number a can be expressed as a = q*p + r, with 0 <= r < p, and q=⌊a/p⌋.
+// define a=w*x, then w*x = q*p + r, and r = w*x - q*p (rearranging the first equation).
+// we can easily compute w*x. but we don't know q*p just yet.
+// q = ⌊w*x/p⌋=⌊(w/p)*x⌋, we can precompute w'=w/p and multiply it by x when needed;
+// however, w'=w/p is a fraction, and we need an integer.
+//
+// so we scale w'=w/p by 2^64 [e.g., w'=bits.Div64(w, 0, f.prime)].
+// now, we can compute q = ⌊(w'*(x/2^64)⌋.
+// how do we compute x/2^64? We get it from free by shifting the 128bit product of w'*x right by 64 bits.
+// which is exactly what bits.Mul64 returns as the first value, the high 64 bits of the product.
+func (f *PrimeField) mulShoup(w, wPrime, x uint64) uint64 {
+	p := f.prime
+
+	// if we drop the low bits from w'*x,
+	// we get w'*x/2^64, which is exactly what we need to compute.
+	q, _ := bits.Mul64(wPrime, x)
+
+	// r = w*x - (w'*x/2^64)
+	r := w*x - q*p
+	// because w' is precomputed as the high bits of w/p, we
+	// actually computed w*x'=⌊w*2^64/p⌋*x. so q might be off by one,\
+	// and r might be off by 1, so correction:
+	if r >= p {
+		r -= p
+	}
+
+	return r
+}
+
 func fieldMul(a, b uint64, mod uint64) uint64 {
 	hi, lo := bits.Mul64(a, b)
 	_, rem := bits.Div64(hi, lo, mod)
