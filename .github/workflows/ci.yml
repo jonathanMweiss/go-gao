@@ -85,15 +85,18 @@ jobs:
 
       # The committed testdata/ corpus runs as ordinary tests on every `go test`.
       # This job additionally fuzzes briefly, to catch regressions the seeds miss.
+      #
+      # The targets are discovered rather than listed. A hardcoded list went stale when
+      # FuzzNttPEEA was deleted, and `go test -fuzz` exits 0 on a pattern matching
+      # nothing, so the gap was silent.
       - name: Fuzz smoke
         run: |
-          for target in FuzzPEEA FuzzNttPEEA FuzzInterpolation FuzzInverse FuzzNegate FuzzSub_Simple FuzzDiv FuzzGCDAgreement; do
-            echo "== $target"
-            go test -run=XXX -fuzz="^${target}$" -fuzztime=30s ./field/
+          for pkg in ./field/ .; do
+            for target in $(go test -list='Fuzz' "$pkg" | grep '^Fuzz'); do
+              echo "== $pkg $target"
+              go test "$pkg" -run=XXX -fuzz="^${target}$" -fuzztime=30s
+            done
           done
-
-          echo "== FuzzRoundTrip"
-          go test -run=XXX -fuzz='^FuzzRoundTrip$' -fuzztime=60s .
 
   govulncheck:
     runs-on: ubuntu-latest

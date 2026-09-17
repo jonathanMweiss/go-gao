@@ -1,0 +1,86 @@
+name: Fuzz (weekly)
+
+# The CI smoke job fuzzes every target for 30s on each push, which catches
+# regressions against the committed corpus. This one searches: one job per target,
+# in parallel, for as long as a weekly budget allows.
+on:
+  schedule:
+    # Sundays, 03:17 UTC. Not on the hour: GitHub drops scheduled runs when the
+    # minute is congested.
+    - cron: '17 3 * * 0'
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: 'Per-target fuzz duration (e.g. 20m, 2h)'
+        required: false
+        default: '20m'
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      # One target's failure must not cancel the search in the others.
+      fail-fast: false
+      matrix:
+        include:
+          - { pkg: './field/', target: 'FuzzPEEA' }
+          - { pkg: './field/', target: 'FuzzDiv' }
+          - { pkg: './field/', target: 'FuzzGCDAgreement' }
+          - { pkg: './field/', target: 'FuzzInterpolation' }
+          - { pkg: './field/', target: 'FuzzInverse' }
+          - { pkg: './field/', target: 'FuzzNegate' }
+          - { pkg: './field/', target: 'FuzzSub_Simple' }
+          - { pkg: './field/', target: 'FuzzCoefficientsStayReduced' }
+          - { pkg: './field/', target: 'FuzzShoupMatchesFieldMul' }
+          - { pkg: '.', target: 'FuzzRoundTrip' }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # cache: false because this workflow manages GOCACHE itself -- setup-go keys its
+      # cache on go.sum, which has nothing to do with how far the corpus has grown.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - name: Locate the build cache
+        id: gocache
+        run: echo "dir=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+
+      # Go keeps generated corpus entries under $GOCACHE/fuzz, not in testdata, so
+      # without this every run restarts the search from the committed seeds.
+      #
+      # The key is unique per run and the restore-keys prefix picks up the newest
+      # earlier one. That matters at a weekly cadence: GitHub evicts caches that go
+      # unused for 7 days, which a Sunday-to-Sunday schedule sits exactly on. Writing
+      # a fresh entry every run restarts that clock instead of racing it.
+      - name: Restore corpus
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.gocache.outputs.dir }}
+          key: fuzz-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-${{ matrix.target }}-
+
+      - name: Fuzz ${{ matrix.target }}
+        run: |
+          go test ${{ matrix.pkg }} \
+            -run='^$' \
+            -fuzz='^${{ matrix.target }}$' \
+            -fuzztime='${{ github.event.inputs.fuzztime || '20m' }}'
+
+      # A failing input is written to testdata/fuzz/<target>/, which dies with the
+      # runner. Keep it: it is the reproducer, and committing it makes the case a
+      # permanent seed.
+      - name: Upload the failing input
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crasher-${{ matrix.target }}
+          path: '**/testdata/fuzz/**'
+          if-no-files-found: ignore
