@@ -1,5 +1,11 @@
 # Gao Decoder for Reed-Solomon Codes in Go
 
+[![CI](https://github.com/jonathanMweiss/go-gao/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jonathanMweiss/go-gao/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/jonathanMweiss/go-gao/branch/main/graph/badge.svg)](https://codecov.io/gh/jonathanMweiss/go-gao)
+[![Go Reference](https://pkg.go.dev/badge/github.com/jonathanmweiss/go-gao.svg)](https://pkg.go.dev/github.com/jonathanmweiss/go-gao)
+[![Go](https://img.shields.io/github/go-mod/go-version/jonathanMweiss/go-gao)](go.mod)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 ## Overview
 
 This repository implements Gao's decoder for Reed-Solomon codes in Go, over

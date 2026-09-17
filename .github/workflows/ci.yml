@@ -43,6 +43,14 @@ jobs:
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1
 
+      # fail_ci_if_error stays false: a Codecov outage is not a reason to redden a
+      # build whose tests passed.
+      - name: Upload coverage
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.out
+          fail_ci_if_error: false
+
       # Only this package, and only under the detector -- not ./... .
       #
       # A *Code is documented as safe to share, and the decoder it shares reaches real
