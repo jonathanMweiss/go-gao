@@ -67,7 +67,7 @@ func TestPolyMult(t *testing.T) {
 		a.NoError(pr.NttForward(p1))
 
 		nttRes := &Polynomial{}
-		pr.mulViaNTT(p1, p1, nttRes)
+		pr.mulWholeNTT(p1, p1, nttRes)
 
 		a.NoError(pr.NttBackward(nttRes))
 

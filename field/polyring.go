@@ -10,6 +10,19 @@ import (
 
 const nttMulThreshold = 16 // ~coeff count where NTT starts winning
 
+// Where a transform overtakes schoolbook, measured on the shorter operand. It is not one
+// number, because the two paths transform different amounts: a balanced product needs one
+// transform of the whole product, while a lopsided one is blocked and never transforms
+// more than a block. The smaller transform pays for itself sooner.
+//
+// Measured on an M2 Pro over p=65537, for balanced operands schoolbook wins at 52 and the
+// transform at 56; for lopsided ones they are level at 32, with schoolbook ahead by up to
+// 3.4x below and blocking ahead by up to 3.8x above.
+const (
+	balancedMulThreshold = 52
+	blockedMulThreshold  = 32
+)
+
 // A PolyRing performs polynomial arithmetic over a fixed coefficient field.
 //
 // Most operations write into a caller-supplied destination rather than allocating, so
@@ -299,13 +312,32 @@ func (r *PolyRing) Mul(a, b, c *Polynomial) {
 		return
 	}
 
-	// Coefficient-domain smart dispatch: schoolbook for small sizes, NTT otherwise.
-	if min(la, lb) <= nttMulThreshold || !r.canUseNTTConvolutionLen(la+lb-1) {
-		r.mulSchoolbook(a, b, c)
-		return
+	ls, ll := min(la, lb), max(la, lb)
+
+	blockLen, lopsided := 0, false
+	if ls > blockedMulThreshold {
+		blockLen, lopsided = blockedConvPlan(ls, ll)
 	}
 
-	r.mulViaNTT(a, b, c)
+	// choosing the best approach for the product, considering how much they transform:
+	// nothing (schoolbook), a block at a time (blocked), or the whole product
+	// at once (standard fft approach).
+	switch {
+	case lopsided && r.canUseNTTConvolutionLen(2*blockLen):
+		short, long := a, b
+		if la > lb {
+			short, long = b, a
+		}
+
+		r.mulBlockedInto(c, short, long, blockLen)
+
+	// not lopsided, and the whole product is small enough to transform, so do it all at once.
+	case ls > balancedMulThreshold && r.canUseNTTConvolutionLen(la+lb-1):
+		r.mulWholeNTT(a, b, c)
+
+	default:
+		r.mulSchoolbook(a, b, c)
+	}
 }
 
 func (r *PolyRing) mulSchoolbook(a, b, c *Polynomial) {
@@ -596,32 +628,19 @@ func nextPow2(n int) int {
 	return 1 << (bits.Len(uint(n - 1)))
 }
 
-func (r *PolyRing) mulViaNTT(a, b, c *Polynomial) {
-	// if both are NTT, pointwise multiply
+// mulWholeNTT multiplies a and b through a single transform of the whole product, and
+// returns the result in the domain the operands came in. c may alias either.
+//
+// Operands already in the NTT domain need no transform at all: there the product is
+// pointwise, and the result stays in that domain.
+func (r *PolyRing) mulWholeNTT(a, b, c *Polynomial) {
 	if a.isNTT && b.isNTT {
 		r.mulPointwiseInto(a, b, c)
 
 		return
 	}
 
-	// else, use mulTrunc with total length (coeff-domain out)
-	la, lb := len(a.inner), len(b.inner)
-	total := la + lb - 1
-
-	short, long := a, b
-	if la > lb {
-		short, long = b, a
-	}
-
-	// A lopsided product is cheaper block by block than in one transform of its whole
-	// length. See blockedconv.go.
-	if !a.isNTT && !b.isNTT {
-		if blockLen, ok := blockedConvPlan(len(short.inner), len(long.inner)); ok {
-			r.mulBlockedInto(c, short, long, blockLen)
-
-			return
-		}
-	}
+	total := len(a.inner) + len(b.inner) - 1
 
 	// mulTruncInto clears its destination before reading the operands, so it cannot be
 	// pointed at one of them. Where c is distinct it writes straight into c's existing

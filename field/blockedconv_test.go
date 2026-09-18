@@ -165,3 +165,68 @@ func TestBlockedConvReachedThroughMul(t *testing.T) {
 		}
 	}
 }
+
+// TestAddSubDefineEveryCoefficient pins the property that lets Add and Sub skip zeroing
+// the tail ensureLen exposes: between the overlap loop and the tail copy they write every
+// coefficient of the destination. A destination arriving with stale contents must not be
+// able to show them through.
+func TestAddSubDefineEveryCoefficient(t *testing.T) {
+	r := blockedTestRing(t)
+
+	for _, s := range []struct{ la, lb int }{{1, 1}, {3, 3}, {5, 2}, {2, 5}, {64, 9}, {9, 64}} {
+		t.Run(fmt.Sprintf("%dx%d", s.la, s.lb), func(t *testing.T) {
+			a, b := rampPoly(r, s.la, 1), rampPoly(r, s.lb, 2)
+
+			clean := r.newDst()
+			r.Add(a, b, clean)
+
+			// Same operation into a destination pre-loaded with a longer run of junk.
+			dirty := rampPoly(r, max(s.la, s.lb)+8, 3)
+			dirty.inner = dirty.inner[:0]
+			r.Add(a, b, dirty)
+
+			if !dirty.Equals(clean) {
+				t.Errorf("Add: stale destination contents showed through")
+			}
+
+			cleanSub, dirtySub := r.newDst(), rampPoly(r, max(s.la, s.lb)+8, 4)
+			dirtySub.inner = dirtySub.inner[:0]
+			r.Sub(a, b, cleanSub)
+			r.Sub(a, b, dirtySub)
+
+			if !dirtySub.Equals(cleanSub) {
+				t.Errorf("Sub: stale destination contents showed through")
+			}
+		})
+	}
+}
+
+// TestMulBeyondTransformCeiling covers what the blocked arm's feasibility check buys:
+// p-1 is 2^16, so 65536 evaluation points is this field's ceiling and a product of 70162
+// coefficients is past it. The blocks are 512 points, which fits, so blocking applies
+// where a transform of the whole product cannot.
+func TestMulBeyondTransformCeiling(t *testing.T) {
+	r := blockedTestRing(t)
+
+	const ls, ll = 163, 70000
+	if r.canUseNTTConvolutionLen(ls + ll - 1) {
+		t.Fatal("shape no longer exceeds the ceiling; pick a longer one")
+	}
+
+	blockLen, lopsided := blockedConvPlan(ls, ll)
+	if !lopsided || !r.canUseNTTConvolutionLen(2*blockLen) {
+		t.Fatal("shape no longer reaches the blocked arm; the test proves nothing")
+	}
+
+	short, long := rampPoly(r, ls, 1), rampPoly(r, ll, 2)
+
+	want := r.newDst()
+	r.mulSchoolbook(short, long, want)
+
+	got := r.newDst()
+	r.Mul(short, long, got)
+
+	if !got.Equals(want) {
+		t.Fatalf("length %d vs %d", len(got.inner), len(want.inner))
+	}
+}
