@@ -26,7 +26,9 @@ type scratchPools struct {
 // of unspecified value: the caller must write every one it later reads. Use
 // [PolyRing.borrowPolyZeroed] where the tail has to read as zero.
 //
-// The caller must return it with [PolyRing.returnPoly] and must not let it escape.
+// The caller owns what it gets, and keeping it is an ordinary allocation. Returning it
+// with [PolyRing.returnPoly] offers it to the next borrower instead, which is worth doing
+// for anything that dies in the call.
 func (r *PolyRing) borrowPoly(n int) *Polynomial {
 	p := r.takePoly()
 	ensureLenCheap(p, n)

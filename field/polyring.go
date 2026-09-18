@@ -734,10 +734,19 @@ func (r *PolyRing) seriesInverse(b *Polynomial, k int) *Polynomial {
 	// t and next trade places every iteration, so which of the two is returned depends on
 	// the number of steps. tmp never escapes.
 	b0 := b.inner[0]
-	t := &Polynomial{f: r.f, isNTT: false, inner: make([]uint64, 1, k)}
+
+	// we don't defer returnPoly(t) because it is returned to the caller
+	t := r.borrowPoly(k)
+
+	t.inner = t.inner[:1]
 	t.inner[0] = r.f.Inverse(b0)
-	next := &Polynomial{f: r.f, isNTT: false, inner: make([]uint64, 0, k)}
-	tmp := &Polynomial{f: r.f, inner: make([]uint64, k)}
+
+	next := r.borrowPoly(k)
+	next.inner = next.inner[:0]
+
+	tmp := r.borrowPoly(k)
+	defer r.returnPoly(tmp)
+
 	two := r.f.Reduce(2)
 
 	f := r.f
@@ -752,8 +761,9 @@ func (r *PolyRing) seriesInverse(b *Polynomial, k int) *Polynomial {
 
 		// tmp = 2 - tmp (mod x^m)
 		tmp.inner[0] = f.Sub(two, tmp.inner[0])
+		tmpinner := tmp.inner[:m]
 		for i := 1; i < m; i++ {
-			tmp.inner[i] = f.Neg(tmp.inner[i])
+			tmpinner[i] = f.Neg(tmpinner[i])
 		}
 
 		// t = t * tmp mod x^m
@@ -761,6 +771,11 @@ func (r *PolyRing) seriesInverse(b *Polynomial, k int) *Polynomial {
 		t, next = next, t
 		l = m
 	}
+
+	// t holds the result and goes to the caller; next is the discarded half of the last
+	// swap, so it goes back.
+	r.returnPoly(next)
+
 	return t
 }
 
@@ -789,6 +804,7 @@ func (r *PolyRing) divViaNTT(a, b *Polynomial, n, m int) (q, rem *Polynomial) {
 
 	// 2) T = (Bstar)^{-1} mod x^k (Newton series inverse)
 	T := r.seriesInverse(Bstar, k) // length k
+	defer r.returnPoly(T)          // T is not used outside this function, so return it to the pool.
 
 	// 3) Q* = A* * T mod x^k
 	Qstar := r.mulTrunc(Astar, T, k)
