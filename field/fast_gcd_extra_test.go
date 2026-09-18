@@ -13,11 +13,7 @@ import (
 // advances the remaining distance after the mandatory division. At these sizes it is
 // taken 63 times.
 func TestHGCDSecondRecursivePath(t *testing.T) {
-	// Use a standard prime field.
-	f, err := NewPrimeField(65537)
-	if err != nil {
-		t.Fatal(err)
-	}
+	f := newPrimeField(t, NTTFriendlyPrime)
 
 	pr := NewPolyRing(f)
 

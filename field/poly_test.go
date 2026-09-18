@@ -549,8 +549,7 @@ func BenchmarkPolyProductMonicNegRoots(b *testing.B) {
 
 func TestDivNTT(t *testing.T) {
 	a := assert.New(t)
-	f, err := NewPrimeField(65537)
-	a.NoError(err)
+	f := newPrimeField(t, NTTFriendlyPrime)
 
 	for _, maxDegree := range []int{16, 64, 256, 1024} {
 		p := randomPolynomial(f, 12345, maxDegree)
@@ -571,11 +570,8 @@ BenchmarkDivs/A=2048_B=1024/DivNTT
 BenchmarkDivs/A=2048_B=1024/DivNTT-10      	     356	   3374486 ns/op	  441755 B/
 */
 func BenchmarkDivs(b *testing.B) {
-	f, err := NewPrimeField(65537)
-	if err != nil {
-		b.Fatal(err)
-	}
-	pr := NewPolyRing(f)
+	pr := ringOver(b, NTTFriendlyPrime)
+	f := pr.f
 
 	type cfg struct{ degA, degB int }
 	cases := []cfg{
@@ -641,10 +637,8 @@ func BenchmarkDivs(b *testing.B) {
 func TestMulAliasedDestination(t *testing.T) {
 	a := assert.New(t)
 
-	f, err := NewPrimeField(65537)
-	a.NoError(err)
-
-	r := NewPolyRing(f)
+	r := ringOver(t, NTTFriendlyPrime)
+	f := r.f
 
 	// degree 1 and 8 dispatch to schoolbook, 64 to the NTT path.
 	for _, degree := range []int{1, 8, 64} {
@@ -682,11 +676,8 @@ func TestMulAliasedDestination(t *testing.T) {
 func TestNewPolynomialReducesInput(t *testing.T) {
 	a := assert.New(t)
 
-	const prime = 65537
-	f, err := NewPrimeField(prime)
-	a.NoError(err)
-
-	r := NewPolyRing(f)
+	const prime = uint64(NTTFriendlyPrime)
+	r := ringOver(t, NTTFriendlyPrime)
 
 	p := r.NewPolynomial([]uint64{prime + 5, 2*prime + 7, prime}, false)
 	want := r.NewPolynomial([]uint64{5, 7, 0}, false)
@@ -733,12 +724,8 @@ func FuzzCoefficientsStayReduced(fz *testing.F) {
 	fz.Add(uint64(3), uint8(1), uint8(1))
 
 	fz.Fuzz(func(t *testing.T, seed uint64, aLen, bLen uint8) {
-		f, err := NewPrimeField(65537)
-		if err != nil {
-			t.Fatal(err)
-		}
+		r := ringOver(t, NTTFriendlyPrime)
 
-		r := NewPolyRing(f)
 		rng := rand.New(rand.NewSource(int64(seed)))
 
 		raw := func(n int) []uint64 {

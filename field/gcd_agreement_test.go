@@ -15,7 +15,7 @@ func gcdPair(pr *PolyRing, rng *rand.Rand, degA int) (a, b *Polynomial) {
 	coeffs := func(n int) []uint64 {
 		c := make([]uint64, n)
 		for i := range c {
-			c[i] = rng.Uint64() % 65537
+			c[i] = rng.Uint64() % NTTFriendlyPrime
 		}
 
 		c[n-1] = rng.Uint64()%65536 + 1

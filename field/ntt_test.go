@@ -27,8 +27,7 @@ func TestNTTForward(t *testing.T) {
 func TestNTTForwardBackward(t *testing.T) {
 	// Test the forward and backward NTT transforms.
 	a := assert.New(t)
-	f, err := NewPrimeField(65537)
-	a.NoError(err)
+	f := newPrimeField(t, NTTFriendlyPrime)
 
 	pr := NewPolyRing(f)
 	for i := range 8 {
@@ -47,8 +46,7 @@ func TestNTTForwardBackward(t *testing.T) {
 
 func TestPolyMult(t *testing.T) {
 	a := assert.New(t)
-	f, err := NewPrimeField(65537)
-	a.NoError(err)
+	f := newPrimeField(t, NTTFriendlyPrime)
 
 	pr := NewPolyRing(f)
 
@@ -87,8 +85,7 @@ func TestPolyMult(t *testing.T) {
 // check on both.
 func TestNTTRecursiveMatchesIterative(t *testing.T) {
 	a := assert.New(t)
-	f, err := NewPrimeField(65537)
-	a.NoError(err)
+	f := newPrimeField(t, NTTFriendlyPrime)
 
 	pr := NewPolyRing(f)
 

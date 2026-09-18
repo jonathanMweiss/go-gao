@@ -7,14 +7,23 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
+
+func newPrimeField(t testing.TB, prime uint64) *PrimeField {
+	t.Helper()
+
+	f, err := NewPrimeField(prime)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return f
+}
 
 // TestEmptyCoefficientsYieldZeroPolynomial: an empty sum of terms is zero, so an empty
 // coefficient slice is the zero polynomial rather than an error.
 func TestEmptyCoefficientsYieldZeroPolynomial(t *testing.T) {
-	f, err := NewPrimeField(65537)
-	require.NoError(t, err)
+	f := newPrimeField(t, NTTFriendlyPrime)
 
 	pr := NewPolyRing(f)
 
@@ -32,8 +41,7 @@ func TestEmptyCoefficientsYieldZeroPolynomial(t *testing.T) {
 }
 
 func TestIsZero(t *testing.T) {
-	f, err := NewPrimeField(65537)
-	require.NoError(t, err)
+	f := newPrimeField(t, NTTFriendlyPrime)
 
 	pr := NewPolyRing(f)
 
@@ -61,8 +69,7 @@ func TestIsZero(t *testing.T) {
 // TestZeroPolynomialIsUsableInRingOps: constructing the zero polynomial is only useful
 // if the ring then accepts it wherever a zero divisor is not implied.
 func TestZeroPolynomialIsUsableInRingOps(t *testing.T) {
-	f, err := NewPrimeField(65537)
-	require.NoError(t, err)
+	f := newPrimeField(t, NTTFriendlyPrime)
 
 	pr := NewPolyRing(f)
 
@@ -98,8 +105,7 @@ func TestNilFieldPanics(t *testing.T) {
 // TestProductEmptyIsOne: an empty product is the multiplicative identity, mirroring an
 // empty coefficient slice yielding the zero polynomial.
 func TestProductEmptyIsOne(t *testing.T) {
-	f, err := NewPrimeField(65537)
-	require.NoError(t, err)
+	f := newPrimeField(t, NTTFriendlyPrime)
 
 	pr := NewPolyRing(f)
 
@@ -118,8 +124,7 @@ func TestProductEmptyIsOne(t *testing.T) {
 // uncopied, which is only safe because Mul reads its operands. Pin both halves of that:
 // the inputs survive untouched, and the result is never the caller's polynomial.
 func TestProductDoesNotAliasOrMutateInput(t *testing.T) {
-	f, err := NewPrimeField(65537)
-	require.NoError(t, err)
+	f := newPrimeField(t, NTTFriendlyPrime)
 
 	pr := NewPolyRing(f)
 
@@ -153,8 +158,7 @@ func TestProductDoesNotAliasOrMutateInput(t *testing.T) {
 // TestRingNewPolynomialUsesRingField: the whole point of the method form is that the
 // field cannot be mismatched or forgotten.
 func TestRingNewPolynomialUsesRingField(t *testing.T) {
-	f, err := NewPrimeField(65537)
-	require.NoError(t, err)
+	f := newPrimeField(t, NTTFriendlyPrime)
 
 	pr := NewPolyRing(f)
 

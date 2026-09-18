@@ -236,8 +236,7 @@ func FuzzSub_Simple(fz *testing.F) {
 func TestRootsOfUnityGeneration(t *testing.T) {
 	a := assert.New(t)
 
-	f, err := NewPrimeField(65537) // many roots of unity...
-	a.NoError(err)
+	f := newPrimeField(t, NTTFriendlyPrime)
 
 	for i := range 8 {
 		N := uint64(1 << (i + 1))

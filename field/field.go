@@ -29,6 +29,13 @@ var (
 
 const maxBitUsage = 63
 
+// NTTFriendlyPrime is a prime chosen so that both things a codeword needs are
+// comfortable: room in the symbol, and room in the transform.
+//
+// It is a good default, not the only choice. Any prime with a large power of two
+// dividing p-1 works, and anything at or above 2^56 packs the same seven bytes.
+const NTTFriendlyPrime = 144115158011084801
+
 // NewPrimeField returns the field of integers modulo prime.
 //
 // prime must be prime and below 2^63. Which sizes of NTT the field admits follows from

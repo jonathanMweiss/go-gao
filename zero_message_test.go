@@ -34,8 +34,7 @@ var zeroMessageCases = []testCase{
 // What is pinned here is the whole ball, with the boundary spent in each of its three
 // ways: all errors, all erasures, and a mixture.
 func TestZeroMessageDecodes(t *testing.T) {
-	f, err := field.NewPrimeField(65537)
-	require.NoError(t, err)
+	f := newfield(t, field.NTTFriendlyPrime)
 
 	for _, tc := range zeroMessageCases {
 		code, err := NewCode(f, tc.n, tc.k, tc.opt)
@@ -111,8 +110,7 @@ func TestZeroMessageDecodes(t *testing.T) {
 // low-order case is the one that used to break division, and the high-order case the one
 // that used to come back shorter than k.
 func TestNearZeroMessagesRoundTrip(t *testing.T) {
-	f, err := field.NewPrimeField(65537)
-	require.NoError(t, err)
+	f := newfield(t, field.NTTFriendlyPrime)
 
 	for _, tc := range zeroMessageCases {
 		code, err := NewCode(f, tc.n, tc.k, tc.opt)

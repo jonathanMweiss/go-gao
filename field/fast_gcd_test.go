@@ -12,8 +12,7 @@ import (
 
 func TestPartialGCDLarge(t *testing.T) {
 	a := assert.New(t)
-	f, err := NewPrimeField(65537)
-	a.NoError(err)
+	f := newPrimeField(t, NTTFriendlyPrime)
 
 	pr := NewPolyRing(f)
 
@@ -69,10 +68,7 @@ func (r *PolyRing) partialGCDRightColumnOnly(a, b *Polynomial, stopDegree int) (
 }
 
 func BenchmarkGCDScaling(b *testing.B) {
-	f, err := NewPrimeField(65537)
-	if err != nil {
-		b.Fatal(err)
-	}
+	f := newPrimeField(b, NTTFriendlyPrime)
 	pr := NewPolyRing(f)
 
 	// Test across a range of degrees to see the crossover point and scaling.
@@ -106,8 +102,8 @@ func BenchmarkGCDScaling(b *testing.B) {
 
 func TestHGCDSecondRecursionCoverage(t *testing.T) {
 	a_assert := assert.New(t)
-	f, err := NewPrimeField(65537)
-	a_assert.NoError(err)
+	f := newPrimeField(t, NTTFriendlyPrime)
+
 	pr := NewPolyRing(f)
 
 	// Fibonacci polynomials: F_n = x*F_{n-1} + F_{n-2}

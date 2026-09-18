@@ -26,10 +26,12 @@ var blockedShapes = []struct{ ls, ll int }{
 	{129, 3073},
 }
 
-func blockedTestRing(t testing.TB) *PolyRing {
+// ringOver builds a ring over an explicit modulus, for the one test below whose subject
+// is the transform ceiling itself and so cannot use a field with room to spare.
+func ringOver(t testing.TB, prime uint64) *PolyRing {
 	t.Helper()
 
-	f, err := NewPrimeField(65537)
+	f, err := NewPrimeField(prime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +42,7 @@ func blockedTestRing(t testing.TB) *PolyRing {
 func rampPoly(r *PolyRing, n, seed int) *Polynomial {
 	c := make([]uint64, n)
 	for i := range c {
-		c[i] = uint64((i+1)*(7919+seed)) % 65537
+		c[i] = uint64((i+1)*(7919+seed)) % NTTFriendlyPrime
 	}
 
 	return r.NewPolynomial(c, false)
@@ -49,7 +51,7 @@ func rampPoly(r *PolyRing, n, seed int) *Polynomial {
 // TestBlockedConvMatchesWholeTransform checks the overlap-add result against the single
 // transform it replaces, for every shape regardless of which one the plan prefers.
 func TestBlockedConvMatchesWholeTransform(t *testing.T) {
-	r := blockedTestRing(t)
+	r := ringOver(t, NTTFriendlyPrime)
 
 	for _, s := range blockedShapes {
 		t.Run(fmt.Sprintf("%dx%d", s.ls, s.ll), func(t *testing.T) {
@@ -76,7 +78,7 @@ func TestBlockedConvMatchesWholeTransform(t *testing.T) {
 // TestBlockedConvAliasedDestination covers the documented case where the destination is
 // one of the operands, which the blocked path must not overwrite while reading it.
 func TestBlockedConvAliasedDestination(t *testing.T) {
-	r := blockedTestRing(t)
+	r := ringOver(t, NTTFriendlyPrime)
 
 	for _, s := range []struct{ ls, ll int }{{163, 16384}, {33, 512}} {
 		t.Run(fmt.Sprintf("%dx%d", s.ls, s.ll), func(t *testing.T) {
@@ -143,7 +145,7 @@ func TestBlockedConvPlan(t *testing.T) {
 // reachable on its own, by checking Mul against a schoolbook reference on a shape the
 // plan accepts.
 func TestBlockedConvReachedThroughMul(t *testing.T) {
-	r := blockedTestRing(t)
+	r := ringOver(t, NTTFriendlyPrime)
 
 	short, long := rampPoly(r, 163, 1), rampPoly(r, 2048, 2)
 	if _, ok := blockedConvPlan(163, 2048); !ok {
@@ -171,7 +173,7 @@ func TestBlockedConvReachedThroughMul(t *testing.T) {
 // coefficient of the destination. A destination arriving with stale contents must not be
 // able to show them through.
 func TestAddSubDefineEveryCoefficient(t *testing.T) {
-	r := blockedTestRing(t)
+	r := ringOver(t, NTTFriendlyPrime)
 
 	for _, s := range []struct{ la, lb int }{{1, 1}, {3, 3}, {5, 2}, {2, 5}, {64, 9}, {9, 64}} {
 		t.Run(fmt.Sprintf("%dx%d", s.la, s.lb), func(t *testing.T) {
@@ -206,7 +208,7 @@ func TestAddSubDefineEveryCoefficient(t *testing.T) {
 // coefficients is past it. The blocks are 512 points, which fits, so blocking applies
 // where a transform of the whole product cannot.
 func TestMulBeyondTransformCeiling(t *testing.T) {
-	r := blockedTestRing(t)
+	r := ringOver(t, 65537)
 
 	const ls, ll = 163, 70000
 	if r.canUseNTTConvolutionLen(ls + ll - 1) {

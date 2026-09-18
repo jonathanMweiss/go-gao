@@ -77,8 +77,7 @@ func corruptCodeword(f field.Field, rng *rand.Rand, codeword []uint64, count int
 
 func TestNoCorruptions(t *testing.T) {
 	a := assert.New(t)
-	f, err := field.NewPrimeField(65537)
-	a.NoError(err)
+	f := newfield(t, field.NTTFriendlyPrime)
 
 	testCases := []testCase{
 		{"pointwise", Pointwise(), 18, 5},
@@ -104,8 +103,7 @@ func TestNoCorruptions(t *testing.T) {
 
 func TestErasures(t *testing.T) {
 	a := assert.New(t)
-	f, err := field.NewPrimeField(65537)
-	a.NoError(err)
+	f := newfield(t, field.NTTFriendlyPrime)
 
 	testCases := []testCase{
 		{"pointwise", Pointwise(), 18, 5},
@@ -131,8 +129,7 @@ func TestErasures(t *testing.T) {
 
 func TestMixedErasuresAndCorruptions(t *testing.T) {
 	a := assert.New(t)
-	f, err := field.NewPrimeField(65537)
-	a.NoError(err)
+	f := newfield(t, field.NTTFriendlyPrime)
 
 	testCases := []testCase{
 		{"pointwise", Pointwise(), 18, 5}, // n-k=13. 2t+e <= 13. e=5, t=4 => 5+8=13.
@@ -163,8 +160,7 @@ func TestMixedErasuresAndCorruptions(t *testing.T) {
 
 func TestCorruptions(t *testing.T) {
 	a := assert.New(t)
-	f, err := field.NewPrimeField(65537)
-	a.NoError(err)
+	f := newfield(t, field.NTTFriendlyPrime)
 
 	testCases := []testCase{
 		{"pointwise", Pointwise(), 18, 5},
@@ -195,8 +191,7 @@ func TestCorruptions(t *testing.T) {
 
 func TestSliceEncodeDecode(t *testing.T) {
 	a := assert.New(t)
-	f, err := field.NewPrimeField(65537)
-	a.NoError(err)
+	f := newfield(t, field.NTTFriendlyPrime)
 
 	rng := rand.New(rand.NewSource(1337))
 
@@ -243,8 +238,7 @@ func TestSliceEncodeDecode(t *testing.T) {
 // (b) sum of codewords is a codeword, thus fires the fast path.
 func TestOptimisticErrorFreePath(t *testing.T) {
 	a := assert.New(t)
-	f, err := field.NewPrimeField(65537)
-	a.NoError(err)
+	f := newfield(t, field.NTTFriendlyPrime)
 
 	rng := rand.New(rand.NewSource(1337))
 

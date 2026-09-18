@@ -20,7 +20,7 @@ var dotShapes = []struct{ lx, lp, ly, lq int }{
 // TestDotNewMatchesNaive checks x*p + y*q against the three-buffer formulation it
 // replaces, for shapes on either side of the multiplication dispatch.
 func TestDotNewMatchesNaive(t *testing.T) {
-	r := blockedTestRing(t)
+	r := ringOver(t, NTTFriendlyPrime)
 
 	for _, s := range dotShapes {
 		t.Run(fmt.Sprintf("%dx%d+%dx%d", s.lx, s.lp, s.ly, s.lq), func(t *testing.T) {
@@ -40,7 +40,7 @@ func TestDotNewMatchesNaive(t *testing.T) {
 // TestDotNewDoesNotMutateOperands guards the borrowed buffer against being handed out as
 // one of the operands, which would corrupt a caller's polynomial.
 func TestDotNewDoesNotMutateOperands(t *testing.T) {
-	r := blockedTestRing(t)
+	r := ringOver(t, NTTFriendlyPrime)
 
 	x, p := rampPoly(r, 163, 1), rampPoly(r, 16384, 2)
 	y, q := rampPoly(r, 163, 3), rampPoly(r, 16384, 4)
@@ -63,7 +63,7 @@ func TestDotNewDoesNotMutateOperands(t *testing.T) {
 // comes back longer than the next caller needs. A product that failed to define every
 // coefficient it returns would surface here as leftovers from the previous call.
 func TestDotNewPoolReuse(t *testing.T) {
-	r := blockedTestRing(t)
+	r := ringOver(t, NTTFriendlyPrime)
 
 	big := []int{163, 16384}
 	small := []int{3, 7}

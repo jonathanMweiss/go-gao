@@ -15,7 +15,7 @@ import (
 func divTestField(t testing.TB) (Field, *PolyRing) {
 	t.Helper()
 
-	f, err := NewPrimeField(65537)
+	f, err := NewPrimeField(NTTFriendlyPrime)
 	require.NoError(t, err)
 
 	return f, NewPolyRing(f)
@@ -96,12 +96,12 @@ func FuzzDiv(fz *testing.F) {
 
 		aCoeffs := make([]uint64, na)
 		for i := int(lowZeros) % na; i < na; i++ {
-			aCoeffs[i] = rng.Uint64() % 65537
+			aCoeffs[i] = rng.Uint64() % NTTFriendlyPrime
 		}
 
 		bCoeffs := make([]uint64, nb)
 		for i := range bCoeffs {
-			bCoeffs[i] = rng.Uint64() % 65537
+			bCoeffs[i] = rng.Uint64() % NTTFriendlyPrime
 		}
 
 		// A zero divisor is a documented panic, not a case to check here.

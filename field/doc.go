@@ -31,6 +31,12 @@ largest such order — the largest power of two dividing p-1, not the size of p
 before choosing a prime: 65537 admits a 65536-point transform, while 929
 admits only a 32-point one.
 
+Size matters separately from that. A symbol is a uint64 whatever the modulus
+is, and a field operation costs the same either way, so a small prime pays a
+full 64-bit multiply to move very few bits. [NTTFriendlyPrime] is a default
+that is comfortable on both counts: 57 bits, so seven whole bytes fit in a
+symbol, and 2^32 divides p-1.
+
 # Polynomials
 
 A [Polynomial] holds its coefficients in one of two representations:

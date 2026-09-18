@@ -18,36 +18,62 @@ import (
 // TestNewCodeRejectsBadSizes covers parameters that used to panic from inside Encode
 // instead of being reported at construction time.
 func TestNewCodeRejectsBadSizes(t *testing.T) {
-	f, err := field.NewPrimeField(65537)
-	require.NoError(t, err)
-
 	for _, tc := range []struct {
 		name string
-		opts []Option
-		n, k int
-		want error
+		// prime overrides the default. Two cases below are about a size the field
+		// cannot serve, which needs a field whose limits are reachable: over
+		// NTTFriendlyPrime, n = 2^20 is both well inside the modulus and a divisor of
+		// p-1, so neither rejection would fire and the cases would pass vacuously.
+		prime uint64
+		opts  []Option
+		n, k  int
+		want  error
 	}{
-		{"n smaller than k", nil, 4, 16, ErrNSmallerThanK},
-		{"zero k", nil, 16, 0, ErrNonPositiveK},
-		{"negative k", nil, 16, -1, ErrNonPositiveK},
-		{"n exceeds the field", nil, 1 << 20, 4, ErrUnsupportedSize},
+		{"n smaller than k", 0, nil, 4, 16, ErrNSmallerThanK},
+		{"zero k", 0, nil, 16, 0, ErrNonPositiveK},
+		{"negative k", 0, nil, 16, -1, ErrNonPositiveK},
+		{"n exceeds the field", 65537, nil, 1 << 20, 4, ErrUnsupportedSize},
 		// RequireNTT turns the silent pointwise fallback into an error.
-		{"require ntt, n not a power of two", []Option{RequireNTT()}, 20, 4, ErrUnsupportedSize},
-		{"require ntt, n does not divide p-1", []Option{RequireNTT()}, 1 << 20, 4, ErrUnsupportedSize},
-		{"require ntt, n too small", []Option{RequireNTT()}, 1, 1, ErrUnsupportedSize},
+		{"require ntt, n not a power of two", 0, []Option{RequireNTT()}, 20, 4, ErrUnsupportedSize},
+		{"require ntt, n does not divide p-1", 65537, []Option{RequireNTT()}, 1 << 20, 4, ErrUnsupportedSize},
+		{"require ntt, n too small", 0, []Option{RequireNTT()}, 1, 1, ErrUnsupportedSize},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := NewCode(f, tc.n, tc.k, tc.opts...)
+			prime := tc.prime
+			if prime == 0 {
+				prime = field.NTTFriendlyPrime
+			}
+
+			f, err := field.NewPrimeField(prime)
+			require.NoError(t, err)
+
+			_, err = NewCode(f, tc.n, tc.k, tc.opts...)
 			assert.ErrorIs(t, err, tc.want)
 		})
 	}
 }
 
+func newfield(t testing.TB, prime uint64) *field.PrimeField {
+	t.Helper()
+
+	f, err := field.NewPrimeField(prime)
+	if err != nil {
+
+		t.Fatal(err)
+	}
+
+	return f
+}
+func ringOver(t testing.TB, prime uint64) *field.PolyRing {
+	t.Helper()
+
+	return field.NewPolyRing(newfield(t, prime))
+}
+
 // TestNewCodeSelectsStrategy: the evaluator is chosen for the caller, so the choice must
 // be right — and visible, since falling back to the quadratic path is otherwise silent.
 func TestNewCodeSelectsStrategy(t *testing.T) {
-	f, err := field.NewPrimeField(65537)
-	require.NoError(t, err)
+	f := newfield(t, field.NTTFriendlyPrime)
 
 	// 929 is the prime field PDF417 barcodes are defined over. p-1 = 928 = 2^5 * 29, so
 	// a transform exists only up to 32 points -- and since decoding needs a 2n-point one,
@@ -84,10 +110,9 @@ func TestNewCodeSelectsStrategy(t *testing.T) {
 // because they did not know their parameters were unsuitable, so the message has to say
 // what the constraint is.
 func TestRequireNTTErrorIsActionable(t *testing.T) {
-	f, err := field.NewPrimeField(65537)
-	require.NoError(t, err)
+	f := newfield(t, 65537)
 
-	_, err = NewCode(f, 20, 4, RequireNTT())
+	_, err := NewCode(f, 20, 4, RequireNTT())
 	require.Error(t, err)
 
 	// The shape requirement and the field, so the reader can tell which to change.
@@ -100,8 +125,7 @@ func TestRequireNTTErrorIsActionable(t *testing.T) {
 // Both paths through it are covered, since the erasure path rescales every value before
 // interpolating and so has the most to overwrite.
 func TestDecodeDoesNotMutateInput(t *testing.T) {
-	f, err := field.NewPrimeField(65537)
-	require.NoError(t, err)
+	f := newfield(t, field.NTTFriendlyPrime)
 
 	for _, tc := range []testCase{
 		{"pointwise", Pointwise(), 18, 5},
@@ -150,8 +174,7 @@ func TestDecodeDoesNotMutateInput(t *testing.T) {
 // TestDecodeRejectsWrongLength: the positional API cannot express erasures, so
 // a short slice is a caller error rather than a set of missing points.
 func TestDecodeRejectsWrongLength(t *testing.T) {
-	f, err := field.NewPrimeField(65537)
-	require.NoError(t, err)
+	f := newfield(t, field.NTTFriendlyPrime)
 
 	code, err := NewCode(f, 16, 4, RequireNTT())
 	require.NoError(t, err)
@@ -167,8 +190,7 @@ func TestDecodeRejectsWrongLength(t *testing.T) {
 // an erasure costs half an error, so a codeword that is hopeless when its damage is
 // treated as errors decodes cleanly once the positions are declared.
 func TestDecodeErasures(t *testing.T) {
-	f, err := field.NewPrimeField(65537)
-	require.NoError(t, err)
+	f := newfield(t, field.NTTFriendlyPrime)
 
 	const n, k = 16, 4 // n-k = 12, so 6 errors or 12 erasures
 
@@ -270,8 +292,7 @@ func TestDecodeErasures(t *testing.T) {
 // unlike the map form where absent keys are well-formed by construction. A duplicate
 // would give the erasure locator a repeated root and corrupt the decode silently.
 func TestDecodeRejectsBadErasures(t *testing.T) {
-	f, err := field.NewPrimeField(65537)
-	require.NoError(t, err)
+	f := newfield(t, field.NTTFriendlyPrime)
 
 	const n, k = 16, 4
 
@@ -317,8 +338,7 @@ func distinctIndices(count int) []int {
 // TestEvaluationPointsReturnsCopy: a Code holds its own points for its whole life, so a
 // caller mutating what EvaluationPoints hands back must not be able to reach them.
 func TestEvaluationPointsReturnsCopy(t *testing.T) {
-	f, err := field.NewPrimeField(65537)
-	require.NoError(t, err)
+	f := newfield(t, field.NTTFriendlyPrime)
 
 	for name, opt := range map[string]Option{
 		"ntt":       nil,
@@ -353,8 +373,7 @@ func TestEvaluationPointsReturnsCopy(t *testing.T) {
 // the poly ring's twiddle cache and the evaluator's point cache across goroutines.
 // Meaningful under -race.
 func TestDecodeIsConcurrencySafe(t *testing.T) {
-	f, err := field.NewPrimeField(65537)
-	require.NoError(t, err)
+	f := newfield(t, field.NTTFriendlyPrime)
 
 	code, err := NewCode(f, 64, 16, RequireNTT())
 	require.NoError(t, err)
@@ -409,8 +428,7 @@ func TestDecodeIsConcurrencySafe(t *testing.T) {
 // one-step overshoot there used to cost exactly one error of capability at every size
 // from 256 up, while every test that stayed under the budget kept passing.
 func TestDecodesAtFullErrorBudget(t *testing.T) {
-	f, err := field.NewPrimeField(65537)
-	require.NoError(t, err)
+	f := newfield(t, field.NTTFriendlyPrime)
 
 	for _, n := range []int{16, 64, 128, 256, 512, 1024, 2048} {
 		k := n / 2

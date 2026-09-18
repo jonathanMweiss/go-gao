@@ -76,8 +76,7 @@ func FuzzRoundTrip(fz *testing.F) {
 	}
 
 	fz.Fuzz(func(t *testing.T, msgSeed, corruptSeed uint64, numErrors, numErases uint8, useNTT bool) {
-		f, err := field.NewPrimeField(65537)
-		require.NoError(t, err)
+		f := newfield(t, field.NTTFriendlyPrime)
 
 		p := fuzzParams[useNTT]
 

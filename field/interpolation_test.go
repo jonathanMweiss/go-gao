@@ -171,10 +171,7 @@ func simplePolyProduct(pr *PolyRing, miSlice []*Polynomial) *Polynomial {
 }
 
 func BenchmarkPolyProductComparison(b *testing.B) {
-	f, err := NewPrimeField(65537)
-	if err != nil {
-		b.Fatalf("failed to create field: %v", err)
-	}
+	f := newPrimeField(b, NTTFriendlyPrime)
 
 	pr := NewPolyRing(f)
 	intr := NewInterpolator(pr)
