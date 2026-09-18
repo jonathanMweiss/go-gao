@@ -75,8 +75,14 @@ func (r *PolyRing) mulBlockedInto(c, short, long *Polynomial, blockLen int) {
 	shoup := r.borrowPoly(n) // the shoup factors of the short operand's transform.
 	defer r.returnPoly(shoup)
 
-	for i, w := range sh.inner {
-		shoup.inner[i] = f.shoupFactor(w)
+	// sh, shoup and chunk are all n coefficients long and none of them is resliced below,
+	// so cutting them to one length lets the loops here index all three without a bounds
+	// check.
+	shInner := sh.inner[:n]
+	shoupInner := shoup.inner[:n]
+
+	for i, w := range shInner {
+		shoupInner[i] = f.shoupFactor(w)
 	}
 
 	// The blocks are read from long and the result is summed into out, so writing
@@ -90,6 +96,8 @@ func (r *PolyRing) mulBlockedInto(c, short, long *Polynomial, blockLen int) {
 
 	chunk := r.borrowPoly(n)
 	defer r.returnPoly(chunk)
+
+	chunkInner := chunk.inner[:n]
 
 	for off := 0; off < ll; off += blockLen {
 		m := min(blockLen, ll-off)
@@ -106,8 +114,8 @@ func (r *PolyRing) mulBlockedInto(c, short, long *Polynomial, blockLen int) {
 
 		// not using multpointwise because the Shoup factors are already
 		// computed and amortized over the blocks.
-		for i, x := range chunk.inner {
-			chunk.inner[i] = f.mulShoup(sh.inner[i], shoup.inner[i], x)
+		for i, x := range chunkInner {
+			chunkInner[i] = f.mulShoup(shInner[i], shoupInner[i], x)
 		}
 
 		if err := r.nttBackwardNoTrim(chunk); err != nil {
@@ -121,7 +129,8 @@ func (r *PolyRing) mulBlockedInto(c, short, long *Polynomial, blockLen int) {
 		// This term spans m + ls - 1 coefficients from off, and the next block starts
 		// only blockLen later, so its tail is added onto ground the next term also covers.
 		seg := out[off : off+m+ls-1]
-		for i, v := range chunk.inner[:len(seg)] {
+		tmp := chunk.inner[:len(seg)]
+		for i, v := range tmp {
 			seg[i] = f.Add(seg[i], v)
 		}
 	}

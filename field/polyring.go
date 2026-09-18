@@ -213,6 +213,7 @@ func (r *PolyRing) Add(a, b, c *Polynomial) {
 	alen := len(a.inner)
 	blen := len(b.inner)
 	n := max(alen, blen)
+
 	ensureLen(c, n)
 	minLen := min(alen, blen)
 
@@ -525,7 +526,8 @@ func polyIdentity2x2(f Field) polyMatrix2x2 {
 //	(M_{00}, M_{10}) = (M_{10}, M_{00} - q*M_{10})
 //	(M_{01}, M_{11}) = (M_{11}, M_{01} - q*M_{11})
 //
-// writing a specialized function rather than Mul+Sub saves allocations and a full-length multiplication per step.
+// the subtraction is fused into mulSubInto so the intermediate product borrows its buffer
+// rather than allocating one per step.
 func (r *PolyRing) applyStep(M polyMatrix2x2, q *Polynomial) polyMatrix2x2 {
 	// mulSubInto writes a - q*b into a destination that must alias neither.
 	lo := r.newDst()
@@ -630,8 +632,14 @@ func (r *PolyRing) mulPointwiseInto(a, b, c *Polynomial) {
 
 func (r *PolyRing) pointwiseMult(a, b, c *Polynomial) {
 	f := r.f
-	for i := range c.inner {
-		c.inner[i] = f.Mul(a.inner[i], b.inner[i])
+
+	// All three carry the same number of evaluations, so cutting them to one length lets
+	// the loop index every one of them without a bounds check.
+	n := len(c.inner)
+	ai, bi, ci := a.inner[:n], b.inner[:n], c.inner[:n]
+
+	for i, ai := range ai {
+		ci[i] = f.Mul(ai, bi[i])
 	}
 }
 
@@ -819,52 +827,14 @@ func (r *PolyRing) addNew(a, b *Polynomial) *Polynomial {
 	return out
 }
 
-// mulSubInto computes dst = a - q*b in one fused pass when q is small,
-// avoiding a temporary allocation for the intermediate product q*b.
-// When q is large, it falls back to mulFull + Sub.
-// All polynomials must be in coefficient domain.
-//
-// returns dst for convenience.
+// mulSubInto computes dst = a - q*b, borrowing a buffer for the intermediate product.
+// All polynomials must be in coefficient domain, and dst may alias any of them.
 func (r *PolyRing) mulSubInto(dst, a, q, b *Polynomial) {
-	lq := len(q.inner)
-	lb := len(b.inner)
+	qb := r.borrowPoly(0)
+	defer r.returnPoly(qb)
 
-	// For large q, fall back to mulFull + Sub with a temporary.
-	// (to use the NTT path, which is faster than schoolbook for large q)
-	if min(lq, lb) > nttMulThreshold {
-		r.Sub(a, r.mulNew(q, b), dst)
-
-		return
-	}
-
-	// Fused schoolbook: dst[k] = a[k] - sum_{i+j=k} q[i]*b[j]
-	// Product q*b has length lq + lb - 1.
-	prodLen := lq + lb - 1
-	n := max(len(a.inner), prodLen)
-
-	f := r.f
-	dst.f = f
-	dst.isNTT = false
-	ensureLenCheap(dst, n)
-
-	// Start with a copy of `a`, zero-extended.
-	la := len(a.inner)
-	copy(dst.inner, a.inner)
-	clear(dst.inner[la:])
-
-	// Subtract q*b from dst in-place: dst[i+j] -= q[i] * b[j]
-	// Iterate over q (the small operand) in the outer loop.
-	for i := 0; i < lq; i++ {
-		qi := q.inner[i]
-		if qi == 0 {
-			continue
-		}
-		for j := 0; j < lb; j++ {
-			dst.inner[i+j] = f.Sub(dst.inner[i+j], f.Mul(qi, b.inner[j]))
-		}
-	}
-
-	dst.trimTrailingZeros()
+	r.Mul(q, b, qb)
+	r.Sub(a, qb, dst)
 }
 
 /*
