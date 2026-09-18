@@ -95,9 +95,12 @@ jobs:
       # exported-but-unreachable method.
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12.2
-          # Built here rather than downloaded: the published binary is compiled with
-          # an older Go and crashes reading 1.27 export data.
+          # v2.12.2 bundles staticcheck v0.7.0, whose IR builder panics on Go 1.27
+          # source ("unexpected expr: *ast.KeyValueExpr" while analysing internal/poll).
+          # v2.13.2 carries staticcheck v0.8.1, which handles it.
+          version: v2.13.2
+          # Built here rather than downloaded, so the linter is compiled with the same
+          # Go as the code it analyses.
           install-mode: goinstall
 
   fuzz:
