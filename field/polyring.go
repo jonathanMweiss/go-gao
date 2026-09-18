@@ -581,6 +581,21 @@ func (r *PolyRing) mulViaNTT(a, b, c *Polynomial) {
 	la, lb := len(a.inner), len(b.inner)
 	total := la + lb - 1
 
+	short, long := a, b
+	if la > lb {
+		short, long = b, a
+	}
+
+	// A lopsided product is cheaper block by block than in one transform of its whole
+	// length. See blockedconv.go.
+	if !a.isNTT && !b.isNTT {
+		if blockLen, ok := blockedConvPlan(len(short.inner), len(long.inner)); ok {
+			r.mulBlockedInto(c, short, long, blockLen)
+
+			return
+		}
+	}
+
 	// mulTruncInto clears its destination before reading the operands, so it cannot be
 	// pointed at one of them. Where c is distinct it writes straight into c's existing
 	// array; where c aliases, the result is built to the side first.
