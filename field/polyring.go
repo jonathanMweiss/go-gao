@@ -26,17 +26,9 @@ type PolyRing struct {
 	f            Field
 	mu           sync.RWMutex
 	twiddleCache map[int]*twiddleSet // key: n
-}
 
-type nttMulScratch struct {
-	a []uint64
-	b []uint64
-}
-
-var nttMulScratchPool = sync.Pool{
-	New: func() any {
-		return &nttMulScratch{}
-	},
+	// scratch lends the working buffers this ring's operations borrow; see scratch.go.
+	scratch scratchPools
 }
 
 // NewPolyRing returns a ring performing polynomial arithmetic over f.
@@ -464,12 +456,27 @@ type polyMatrix2x2 struct {
 	a10, a11 *Polynomial
 }
 
+// dotNew returns x*p + y*q.
+// written specifically to avoid allocations
+func (r *PolyRing) dotNew(x, p, y, q *Polynomial) *Polynomial {
+	tmp := r.borrowPoly(0)
+	defer r.returnPoly(tmp)
+
+	out := r.newDst()
+	r.Mul(x, p, out)
+	r.Mul(y, q, tmp)
+
+	r.Add(out, tmp, out)
+
+	return out
+}
+
 func (m polyMatrix2x2) Mul(r *PolyRing, other polyMatrix2x2) polyMatrix2x2 {
 	return polyMatrix2x2{
-		a00: r.addNew(r.mulNew(m.a00, other.a00), r.mulNew(m.a01, other.a10)),
-		a01: r.addNew(r.mulNew(m.a00, other.a01), r.mulNew(m.a01, other.a11)),
-		a10: r.addNew(r.mulNew(m.a10, other.a00), r.mulNew(m.a11, other.a10)),
-		a11: r.addNew(r.mulNew(m.a10, other.a01), r.mulNew(m.a11, other.a11)),
+		a00: r.dotNew(m.a00, other.a00, m.a01, other.a10),
+		a01: r.dotNew(m.a00, other.a01, m.a01, other.a11),
+		a10: r.dotNew(m.a10, other.a00, m.a11, other.a10),
+		a11: r.dotNew(m.a10, other.a01, m.a11, other.a11),
 	}
 }
 
@@ -478,13 +485,14 @@ func (m polyMatrix2x2) Mul(r *PolyRing, other polyMatrix2x2) polyMatrix2x2 {
 //
 // PartialGCD wants only the remainder, not the pair.
 func (m polyMatrix2x2) mulVecFirst(r *PolyRing, a, b *Polynomial) *Polynomial {
-	return r.addNew(r.mulNew(m.a00, a), r.mulNew(m.a01, b))
+	return r.dotNew(m.a00, a, m.a01, b)
 }
 
 // full matrix vector product: (m.a00*a + m.a01*b, m.a10*a + m.a11*b)
 func (m polyMatrix2x2) MulVec(r *PolyRing, a, b *Polynomial) (*Polynomial, *Polynomial) {
 	aOut := m.mulVecFirst(r, a, b)
-	bOut := r.addNew(r.mulNew(m.a10, a), r.mulNew(m.a11, b))
+	bOut := r.dotNew(m.a10, a, m.a11, b)
+
 	return aOut, bOut
 }
 
@@ -627,19 +635,6 @@ func (r *PolyRing) pointwiseMult(a, b, c *Polynomial) {
 	}
 }
 
-func (r *PolyRing) getNttMulScratch(n int) *nttMulScratch {
-	s := nttMulScratchPool.Get().(*nttMulScratch)
-
-	s.a = resizeZeroed(s.a, n)
-	s.b = resizeZeroed(s.b, n)
-
-	return s
-}
-
-func (r *PolyRing) putNttMulScratch(s *nttMulScratch) {
-	nttMulScratchPool.Put(s)
-}
-
 // Multiply polynomials and then truncate to the lowest L terms.
 // Use NTT under the hood (size = nextPow2(L + L - 1)), then slice [:L].
 func (r *PolyRing) mulTrunc(a, b *Polynomial, L int) *Polynomial {
@@ -674,14 +669,14 @@ func (r *PolyRing) mulTruncInto(dst *Polynomial, a, b *Polynomial, L int) {
 	convLen := min(L, total)
 	n := nextPow2(total)
 
-	scratch := r.getNttMulScratch(n)
-	defer r.putNttMulScratch(scratch)
+	aNTT := r.borrowPolyZeroed(n)
+	defer r.returnPoly(aNTT)
 
-	copy(scratch.a[:la], a.inner[:la])
-	copy(scratch.b[:lb], b.inner[:lb])
+	bNTT := r.borrowPolyZeroed(n)
+	defer r.returnPoly(bNTT)
 
-	aNTT := &Polynomial{f: r.f, inner: scratch.a, isNTT: false}
-	bNTT := &Polynomial{f: r.f, inner: scratch.b, isNTT: false}
+	copy(aNTT.inner[:la], a.inner[:la])
+	copy(bNTT.inner[:lb], b.inner[:lb])
 
 	if err := r.NttForward(aNTT); err != nil {
 		panic(err)

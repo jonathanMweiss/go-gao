@@ -1,9 +1,6 @@
 package field
 
-import (
-	"math/bits"
-	"sync"
-)
+import "math/bits"
 
 // This file holds the overlap-add convolution used for lopsided products.
 //
@@ -24,34 +21,6 @@ import (
 //
 // A is the same in every term, so its transform is computed once and reused, and a block
 // costs one forward and one inverse transform instead of three.
-
-// blockedScratch carries the three buffers a blocked convolution works in, all of the
-// block transform length.
-type blockedScratch struct {
-	short []uint64 // the short operand, transformed
-	shoup []uint64 // its Shoup factors, one per evaluation point
-	chunk []uint64 // the block in flight
-}
-
-var blockedScratchPool = sync.Pool{
-	New: func() any {
-		return &blockedScratch{}
-	},
-}
-
-func getBlockedScratch(n int) *blockedScratch {
-	s := blockedScratchPool.Get().(*blockedScratch)
-
-	s.short = resizeZeroed(s.short, n)
-	s.shoup = resizeZeroed(s.shoup, n)
-	s.chunk = resizeZeroed(s.chunk, n)
-
-	return s
-}
-
-func putBlockedScratch(s *blockedScratch) {
-	blockedScratchPool.Put(s)
-}
 
 // blockedConvPlan returns the block size an overlap-add convolution of operands of
 // lengths ls and ll would use, and reports whether it costs less than transforming the
@@ -90,12 +59,11 @@ func (r *PolyRing) mulBlockedInto(c, short, long *Polynomial, blockLen int) {
 	total := ls + ll - 1
 	n := 2 * blockLen
 
-	scratch := getBlockedScratch(n)
-	defer putBlockedScratch(scratch)
-
 	// The short operand is a factor of every block's product, so it is transformed once
-	// for the whole call.
-	sh := &Polynomial{f: f, inner: scratch.short}
+	// for the whole call. Its tail has to read as zero, so this one is borrowed zeroed.
+	sh := r.borrowPolyZeroed(n)
+	defer r.returnPoly(sh)
+
 	copy(sh.inner, short.inner)
 
 	if err := r.NttForward(sh); err != nil {
@@ -104,8 +72,11 @@ func (r *PolyRing) mulBlockedInto(c, short, long *Polynomial, blockLen int) {
 
 	// Each of these evaluations multiplies one point of every block, so its Shoup factor
 	// is amortized over the blocks and pays for its division after the first one.
+	shoup := r.borrowPoly(n) // the shoup factors of the short operand's transform.
+	defer r.returnPoly(shoup)
+
 	for i, w := range sh.inner {
-		scratch.shoup[i] = f.shoupFactor(w)
+		shoup.inner[i] = f.shoupFactor(w)
 	}
 
 	// The blocks are read from long and the result is summed into out, so writing
@@ -117,7 +88,8 @@ func (r *PolyRing) mulBlockedInto(c, short, long *Polynomial, blockLen int) {
 		out = make([]uint64, total)
 	}
 
-	chunk := &Polynomial{f: f, inner: scratch.chunk}
+	chunk := r.borrowPoly(n)
+	defer r.returnPoly(chunk)
 
 	for off := 0; off < ll; off += blockLen {
 		m := min(blockLen, ll-off)
@@ -135,7 +107,7 @@ func (r *PolyRing) mulBlockedInto(c, short, long *Polynomial, blockLen int) {
 		// not using multpointwise because the Shoup factors are already
 		// computed and amortized over the blocks.
 		for i, x := range chunk.inner {
-			chunk.inner[i] = f.mulShoup(sh.inner[i], scratch.shoup[i], x)
+			chunk.inner[i] = f.mulShoup(sh.inner[i], shoup.inner[i], x)
 		}
 
 		if err := r.nttBackwardNoTrim(chunk); err != nil {
