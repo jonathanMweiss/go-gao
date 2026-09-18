@@ -406,8 +406,7 @@ func BenchmarkPolyDiv(b *testing.B) {
 	p1 := randomPolynomial(f, largePrime/4, 8192)
 	p2 := randomPolynomial(f, largePrime/4, 8192/2)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		pr.Div(p1, p2)
 	}
 }

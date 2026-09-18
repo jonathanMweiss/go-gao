@@ -325,14 +325,21 @@ func (r *PolyRing) mulSchoolbook(a, b, c *Polynomial) {
 
 	// Perform schoolbook convolution: O(n*m).
 	// out[i+j] += a[i] * b[j]
-	for i := range a.inner {
-		ai := a.inner[i]
+	// shoupFactor costs a division, and the inner loop is what amortizes it, so the outer
+	// loop runs over the shorter operand. out[i+j] is symmetric, so the swap is free.
+	as, bs := a.inner, b.inner
+	if len(as) > len(bs) {
+		as, bs = bs, as
+	}
+
+	for i, ai := range as {
 		if ai == 0 {
 			continue
 		}
 
-		for j := range b.inner {
-			out[i+j] = f.Add(out[i+j], f.Mul(ai, b.inner[j]))
+		shoupAi := f.shoupFactor(ai)
+		for j, bj := range bs {
+			out[i+j] = f.Add(out[i+j], f.mulShoup(ai, shoupAi, bj))
 		}
 	}
 

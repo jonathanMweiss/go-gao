@@ -102,8 +102,7 @@ func BenchmarkMulMod(b *testing.B) {
 	e1 := f.Reduce((1 << 63) - 2)
 	e2 := f.Reduce((1 << 60) + 312)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		f.Mul(e1, e2)
 	}
 }
@@ -199,9 +198,8 @@ func BenchmarkMulModBig(b *testing.B) {
 	b2 := big.NewInt((1 << 60) + 312)
 
 	fAsBigint := new(big.Int).SetUint64(f.Modulus())
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		b1.Mul(b1, b2)
 		b1.Mod(b1, fAsBigint)
 	}
