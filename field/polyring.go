@@ -219,8 +219,11 @@ func (r *PolyRing) Add(a, b, c *Polynomial) {
 
 	f := r.f
 
-	for i := 0; i < minLen; i++ {
-		c.inner[i] = f.Add(a.inner[i], b.inner[i])
+	// remove bound checks and indirects by cutting all three to the same length.
+	cinner, ainner, binner := c.inner[:minLen], a.inner[:minLen], b.inner[:minLen]
+
+	for i, x := range ainner {
+		cinner[i] = f.Add(x, binner[i])
 	}
 
 	if alen > blen {
@@ -254,8 +257,9 @@ func (r *PolyRing) Sub(a, b, c *Polynomial) {
 	f := r.f
 
 	// Subtract overlapping part
-	for i := 0; i < minLen; i++ {
-		c.inner[i] = f.Sub(a.inner[i], b.inner[i])
+	cinner, ainner, binner := c.inner[:minLen], a.inner[:minLen], b.inner[:minLen]
+	for i, x := range ainner {
+		cinner[i] = f.Sub(x, binner[i])
 	}
 
 	// Handle remaining coefficients
@@ -264,8 +268,9 @@ func (r *PolyRing) Sub(a, b, c *Polynomial) {
 		copy(c.inner[minLen:], a.inner[minLen:])
 	} else if blen > alen {
 		// If b is longer, copy the negation of its remaining part
-		for i := minLen; i < blen; i++ {
-			c.inner[i] = f.Neg(b.inner[i])
+		cTail := c.inner[minLen:blen]
+		for i, v := range b.inner[minLen:blen] {
+			cTail[i] = f.Neg(v)
 		}
 	}
 
@@ -463,7 +468,14 @@ func (r *PolyRing) dotNew(x, p, y, q *Polynomial) *Polynomial {
 	tmp := r.borrowPoly(0)
 	defer r.returnPoly(tmp)
 
+	// Add sizes its destination to the longer operand, so out is given room for both
+	// products up front. ensuring it doesn't grow during the sum a second time.
 	out := r.newDst()
+	n := max(len(x.inner)+len(p.inner), len(y.inner)+len(q.inner)) - 1
+	if n > 0 {
+		ensureLenCheap(out, n)
+	}
+
 	r.Mul(x, p, out)
 	r.Mul(y, q, tmp)
 
