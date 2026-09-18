@@ -549,29 +549,34 @@ func (r *PolyRing) applyStep(M polyMatrix2x2, q *Polynomial) polyMatrix2x2 {
 // p's top coefficient is zero -- routine for a quotient series -- and an earlier version
 // that found its own anchor by scanning for the degree silently shifted the quotient
 // down by one degree for every low-order zero of the dividend.
-func (r *PolyRing) rev(p *Polynomial, L int) *Polynomial {
-	out := r.newDst()
+// revInto is [PolyRing.rev] writing into a destination the caller supplies, so that a
+// reversal which dies inside its caller can borrow its buffer instead of allocating one.
+func (r *PolyRing) revInto(dst, p *Polynomial, L int) {
+	dst.f = r.f
+	dst.isNTT = false
+
 	if L <= 0 {
-		return out
+		dst.inner = dst.inner[:0]
+
+		return
 	}
 
-	// specifically not using Copy(): revInPlace below requires that out.inner be exactly L
-	// and Copy() would preserve p's length, which may be shorter.
-	out.inner = make([]uint64, L)
-	copy(out.inner, p.inner)
+	// Zeroed rather than cheap: p may be shorter than L, and the tail has to read as the
+	// zero coefficients of p before revInPlace turns them into leading ones.
+	dst.inner = resizeZeroed(dst.inner, L)
+	copy(dst.inner, p.inner)
 
-	revInPlace(out, L)
-
-	return out
+	revInPlace(dst, L)
 }
 
 // revInPlace reverses p's first L coefficients in place, where rev would allocate a
 // second buffer to copy them into. Only valid when p already holds exactly L
 // coefficients, so that the reversal is a permutation of what is there.
 func revInPlace(p *Polynomial, L int) {
+	pInner := p.inner[:L] // cut to length so the loop below can index without bounds checks
 	for i := 0; i < L/2; i++ {
 		j := L - 1 - i
-		p.inner[i], p.inner[j] = p.inner[j], p.inner[i]
+		pInner[i], pInner[j] = pInner[j], pInner[i]
 	}
 }
 
@@ -767,8 +772,15 @@ func (r *PolyRing) divViaNTT(a, b *Polynomial, n, m int) (q, rem *Polynomial) {
 	k := n - m + 1 // quotient length
 
 	// 1) Reverse both inputs whole.
-	Astar := r.rev(a, n+1) // n+1 means full reversal of a.
-	Bstar := r.rev(b, m+1) // m+1 means full reversal of b.
+	// Both reversals die here, so they borrow their buffers.
+	Astar := r.borrowPoly(0)
+	defer r.returnPoly(Astar)
+
+	Bstar := r.borrowPoly(0)
+	defer r.returnPoly(Bstar)
+
+	r.revInto(Astar, a, n+1) // n+1 means full reversal of a.
+	r.revInto(Bstar, b, m+1) // m+1 means full reversal of b.
 
 	// lead(b) maps to Bstar[0]; must be invertible
 	if len(Bstar.inner) == 0 || r.f.Equals(Bstar.inner[0], 0) {
