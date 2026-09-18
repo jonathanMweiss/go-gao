@@ -210,7 +210,7 @@ an erased point is annihilated by $S(\omega_i)=0$, so we use zeros, but any valu
 
 So we can solve for $\tilde{E}(x)$ and $\tilde{Q}(x)$ with GAO, given two corrections:
 
-First, the stop degree determined by $Q$ is $e<\frac{n-k}{2}$; now we want to find $\tilde{Q}=S\cdot E \cdot f$. This polynomial has a particular degree, too; from RS theorem the degree $< \frac{s}{2}+e< \frac{n-k+1}/2$.
+First, the stop degree determined by $Q$ is $e<\frac{n-k}{2}$; now we want to find $\tilde{Q}=S\cdot E \cdot f$. This polynomial has a particular degree, too; from RS theorem the degree $< \frac{s}{2}+e< \frac{n-k+1}{2}$.
 So we bump the Stop degree by $s/2$.
 
 Second, we need $g_1(x)\cdot S(x)$. This is a bit troublesome, since a true product would need more points.

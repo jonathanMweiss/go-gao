@@ -27,7 +27,7 @@ corrupted values.
 		return err
 	}
 
-	codeword, err := code.EncodeToSlice([]uint64{10, 20, 30, 40})
+	codeword, err := code.Encode([]uint64{10, 20, 30, 40})
 
 [NewCode] reports bad parameters immediately, as [ErrNonPositiveK],
 [ErrNSmallerThanK] or [ErrUnsupportedSize], rather than failing later.
