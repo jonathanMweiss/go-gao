@@ -11,6 +11,10 @@ import (
 	"github.com/jonathanmweiss/go-gao/field"
 )
 
+// A Codeword is the n evaluations [Code.Encode] produces and [Code.Decode] consumes.
+// each uint64 is a symbol in the code.
+type Codeword []uint64
+
 // Code is a Reed-Solomon code that decodes with Gao's algorithm.
 //
 // A *Code is immutable after construction and safe for concurrent use.
@@ -237,7 +241,7 @@ func selectEvaluator(pr *field.PolyRing, n int, cfg config) (evaluationMap, erro
 // ErrDuplicateErasure for a malformed erasedAt, ErrTooManyMissingPoints if more than n-k
 // positions are erased, and ErrDecoding if no message is consistent with what it was
 // given.
-func (gao *Code) Decode(ys []uint64, erasedAt ...int) ([]uint64, error) {
+func (gao *Code) Decode(ys Codeword, erasedAt ...int) ([]uint64, error) {
 	if len(ys) != gao.N() {
 		return nil, ErrMismatchedLengths
 	}
@@ -541,7 +545,7 @@ func (gao *Code) createErasureLocator(erasedIndices []int, xs []uint64) *field.P
 //
 // It returns ErrDataTooLarge if data holds more than k symbols, and
 // ErrDataElementsTooLarge if any symbol is not less than the field modulus.
-func (gao *Code) Encode(data []uint64) ([]uint64, error) {
+func (gao *Code) Encode(data []uint64) (Codeword, error) {
 	f := gao.PrimeField()
 
 	q := f.Modulus()
