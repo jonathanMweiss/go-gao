@@ -8,28 +8,45 @@
 
 ## Overview
 
-This repository implements Gao's decoder for Reed-Solomon codes in Go, over
-**arbitrary prime fields** up to 63 bits. Can be extended to large prime fields using CRT/RNS.
+Gao's decoder for Reed-Solomon codes, over prime fields up to 63 bits.
 
-Two things distinguish it from the erasure-coding libraries most Go projects reach
-for:
+It repairs two kinds of damage. An **erasure** is a symbol you know is missing. An
+**error** is a symbol that is silently wrong, at a position you do not know. The
+decoder finds those positions itself.
 
-- **It corrects errors, not just erasures.** An erasure is a symbol you know is
-  missing; an error is a symbol that is silently wrong, at a position you do not
-  know. Libraries such as `klauspost/reedsolomon` repair only the former — their
-  README is explicit that "the encoder does not know which parts are invalid". This
-  decoder repairs both, and a mixture of the two, as long as
-  `2*errors + erasures <= n-k`.
-- It works over any prime fields that can be represented by 63bits.
-
-The polynomial and finite-field arithmetic underneath are exported as a reusable
-[`field`](./field) package: prime fields, dense polynomial rings, NTT, Lagrange
-interpolation, and a half-GCD extended Euclidean algorithm.
+Additionally, this repo expose the [`field`](./field) package; it is the underlying arithmetic used throughout this repo: prime fields, dense polynomial rings, NTT (including fast **polynomial Division** based on Netwon-Raphson iterations), Lagrange interpolation, and a **half-GCD** extended Euclidean algorithm.
 
 **No dependencies.** The library imports nothing outside the Go standard library;
 `testify` is used by the tests only.
 
-> **Status: v0.x.** The API may still change. Pin a version.
+**Not a cryptographic library.** The arithmetic is not constant-time, and a decoded
+message is not an authenticated one.
+
+> **Status: v0.1.** The API may still change. Pin a version.
+
+## Where this is useful
+
+Wherever the damage is *wrong values at positions you do not know*.
+
+**Byzantine agreement and reliable broadcast.** Reliable broadcast ensures that as long as fewer than a third of nodes are malicious, all honest nodes deliver the same message to their underlying apps. Classically it costs $\approx n^2 \cdot \ell$ bandwidth across the system, for an $\ell$-bit message: every node echoes the whole thing to every other.
+
+Newer protocols, in the [COOL](https://drops.dagstuhl.de/storage/00lipics/lipics-vol209-disc2021/LIPIcs.DISC.2021.17/LIPIcs.DISC.2021.17.pdf) family, offer the same guarantee for $O(\max\{n\ell,\ n^2 \log q\})$ bandwidth: linear in $n$ per bit of message rather than quadratic, plus a term that does not grow with $\ell$. They do it by encoding the message with Reed-Solomon and dispersing one symbol to each peer, so no node has to relay the whole message. That works only because the code corrects corruptions: a malicious node returns a plausible wrong symbol rather than nothing, and its position is not known in advance.
+
+
+**Information dispersal.** Spread a value across `n` nodes, recover it from a sufficient subset. If a node can return corrupted data rather than simply failing to answer, the reconstruction needs error correction. Nodes known to be down are cheaper: declare them as erasures and they cost one budget unit each instead of two.
+
+**Secret sharing and threshold protocols.** A Shamir share is a polynomial evaluated at a point over a prime field, which is the same object this library encodes. Reconstructing from shares when some may be forged is error correction over that field.
+
+**Silent corruption.** Bit rot, a misbehaving cache, a lossy link that delivers damaged frames rather than dropping them. Anything that hands you data without telling you which part is wrong.
+
+**Verifiable secret sharing over asynchronous networks.** See Ben-Or, Canetti and
+Goldreich, ["Asynchronous secure computation"](https://dl.acm.org/doi/10.1145/167088.167109)
+(STOC 1993), and Cachin, Kursawe, Lysyanskaya and Strobl,
+["Asynchronous verifiable secret sharing and proactive cryptosystems"](https://dl.acm.org/doi/10.1145/586110.586124)
+(CCS 2002).
+
+When the damaged positions *are* known, a disk failed or a packet never arrived, an
+erasure code is the better tool (see [below](#comparison-with-erasure-coding-libraries)).
 
 ## Installation
 
@@ -40,9 +57,14 @@ go get github.com/jonathanmweiss/go-gao
 Requires Go 1.25 or later.
 
 ## Usage
+The API has two main interfaces. An engineer-friendly interface, when you only care about incoming and outgoing bytes,
+and a maths-oriented one, where symbols are used after the encoding.
 
-Encode `k` data symbols into an `n`-symbol codeword, then recover the data after
-up to `(n-k)/2` symbols have been corrupted:
+### Symbols
+
+You can encode `k` data symbols into an `n`-symbol codeword, where `k <= n`. Codewords can be decoded as long as the following holds:  
+$$ 2e+s\le n-k$$
+where $e$ is the number of errors, and $s$ is the number of erasures.
 
 ```go
 package main
@@ -55,7 +77,7 @@ import (
 )
 
 func main() {
-	f, _ := field.NewPrimeField(65537)
+	f, _ := field.NewPrimeField(field.NTTFriendlyPrime)
 
 	const n, k = 16, 4
 	code, _ := gao.NewCode(f, n, k)
@@ -63,8 +85,7 @@ func main() {
 	data := []uint64{10, 20, 30, 40}
 	codeword, _ := code.Encode(data)
 
-	// Corrupt 6 symbols; the maximum this 
-	// specific code can repair.
+	// Corrupt 6 symbols; the maximum this specific code can repair.
 	for _, i := range []int{0, 3, 5, 9, 11, 14} {
 		codeword[i] = 12345
 	}
@@ -73,6 +94,12 @@ func main() {
 	fmt.Println(decoded) // [10 20 30 40]
 }
 ```
+
+A symbol is a field element, so every value must be below the modulus.
+[`field.NTTFriendlyPrime`](./field) is a default sized for both things a codeword needs:
+57 bits, so seven whole bytes fit in a symbol, and $2^{32}$ divides $p-1$, so transforms
+run to $2^{32}$ points.
+
 
 ### Declaring erasures
 
@@ -109,44 +136,77 @@ for i, ok := range seen {
 decoded, err := code.Decode(ys, erased...)
 ```
 
-Past the budget `Decode` usually returns `ErrDecoding`, but it cannot always tell:
-with enough errors a received word can land closer to a *different* valid codeword,
-and you get a confidently wrong message. That is inherent to Reed-Solomon codes, not to this implementation.
+
+### Bytes
+This is the more engineer friendly interface.
+`EncodeBytes` returns the codeword already packed into bytes, ready to send or store.
+`DecodeBytes` takes those bytes back:
+
+```go
+code, _ := gao.NewCode(f, 16, 4)
+
+code.MaxBytes() // 28: k symbols carrying 7 payload bytes each
+
+raw, err := code.EncodeBytes([]byte("attack at dawn"))
+// len(raw) == 128
+
+got, err := code.DecodeBytes(raw)
+// got[:14] == "attack at dawn"
+```
+
+`DecodeBytes` returns `MaxBytes()` bytes, zero-padded past whatever was encoded. The
+padding is indistinguishable from payload afterwards, so keep the original length and
+slice the result.
+
+Byte ranges known to be lost (a dropped packet, a bad sector) are named as erasures,
+which cost half as much of the budget as an undeclared corruption:
+
+```go
+got, err := code.DecodeBytes(raw, gao.ByteRange{Off: 24, Len: 16})
+```
+
+### Too many errors
+
+Past the budget `Decode` or `DecodeBytes` usually returns `ErrDecoding`. It cannot always tell: with enough errors a received word lands closer to a *different* valid codeword, and the decoder returns that message. This is a property of Reed-Solomon codes, not of this implementation.
 
 ### Choosing parameters
 
-`NewCode` picks the evaluation strategy for you:
+`NewCode` picks the evaluation strategy:
 
 | Strategy | Cost | Constraint on `n` |
 |---|---|---|
 | NTT (roots of unity) | quasi-linear | power of two dividing `p-1` |
 | Pointwise (`1..n`) | quadratic in `n` | any `0 < n < p` |
 
-The NTT is used whenever the field and `n` permit, and otherwise it falls back to
-pointwise evaluation. **That fallback is silent**, and at large `n` the difference is
-substantial, so if the fast path is a requirement rather than a preference, say so:
+The NTT is used whenever the field and `n` permit, and otherwise `NewCode` falls back to
+pointwise evaluation. The fallback is silent and the difference at large `n` is
+substantial, so state it when the fast path is a requirement:
 
 ```go
-code, err := gao.NewCode(f, n, k, gao.RequireNTT()) // if not enough roots of unity: error instead of falling back
+code, err := gao.NewCode(f, n, k, gao.RequireNTT()) // error instead of falling back
 code, err := gao.NewCode(f, n, k, gao.Pointwise())  // force the classical path
-code.UsesNTT()                                      // or just check afterwards
+code.UsesNTT()                                      // or check afterwards
 ```
-
-To get the NTT, pick a prime with a large power of two dividing `p-1` — and size it
-against `2n`. Evaluating a codeword needs an `n`-point transform, and decoding
-multiplies polynomials of degree up to `n` inside the partial GCD and needs a `2n`-point
-one, so the NTT strategy requires both.
-
-Since the fallback is silent, say so when you need the fast path:
 
 ```go
-_, err := gao.NewCode(f, 65536, 32768, gao.RequireNTT())
-// ErrUnsupportedSize: ... n and 2n must both be powers of two dividing p-1 ...
+small, _ := field.NewPrimeField(65537) // p-1 = 2^16, so transforms stop at 65536
+
+_, err := gao.NewCode(small, 65536, 32768, gao.RequireNTT())
+// ErrUnsupportedSize: decoding needs a 2n-point transform,
+// and 2n=131072 does not divide p-1=65536
 ```
 
-Invalid parameters are reported at construction — `NewCode` returns
-`ErrUnsupportedSize`, `ErrNSmallerThanK` or `ErrNonPositiveK` rather than failing
-later.
+Two properties of a prime matter, and they are independent. Its **size** sets how much
+payload a symbol carries: a field operation costs the same whatever the modulus, so a
+small prime spends a full 64-bit multiply to move very few bits. Its **2-adicity** (the
+largest power of two dividing `p-1`) bounds the transform length, and so the codeword
+length. Evaluating needs an `n`-point transform and decoding needs a `2n`-point one, so
+size the prime against `2n`.
+
+If you are not sure, pick `field.NTTFriendlyPrime`.
+
+Invalid parameters are reported at construction: `NewCode` returns `ErrUnsupportedSize`,
+`ErrNSmallerThanK` or `ErrNonPositiveK` rather than failing later.
 
 ### Notes
 
@@ -161,9 +221,24 @@ later.
 
 See [`example_test.go`](./example_test.go) and the unit tests for further examples.
 
-## Planned Improvements
+## Comparison with erasure-coding libraries
 
-- Benchmark numbers in this README, rather than only in `go test -bench`.
+Most Go projects reach for an erasure code such as
+[`klauspost/reedsolomon`](https://github.com/klauspost/reedsolomon). The two solve
+different problems, and the difference is what to check before choosing either.
+
+An erasure code takes the damaged positions as an **input**. Given a complete but
+corrupted shard set it has nothing to repair: it returns the corruption unchanged, with
+no error. Locating the damage is the caller's job.
+
+This decoder treats those positions as an **output**. It finds them, at the cost of two
+budget units per error against one per erasure. It also accepts erasures, so a caller
+who does know some positions pays the lower price for them.
+
+Where an erasure code is the better fit: whole shards lost at known positions, large
+payloads, byte-oriented transport; it is also considerably faster, being built on a
+binary field with SIMD assembly and amortising one pass over many independent codewords.
+A prime field buys the error correction and pays for it in throughput.
 
 ## Explanation about the decoding logic
 GAO used a strong assumption:
@@ -234,6 +309,9 @@ Contributions are welcome! If you’d like to contribute, please open an issue o
 - Gao Shuhong. "A new algorithm for decoding Reed-Solomon codes", in Communications, Information and Network Security,  2003.
 - Reed, I. S., & Solomon, G. (1960). "Polynomial codes over certain finite fields."
 - [Reed-Solomon Codes - Wikipedia](https://en.wikipedia.org/wiki/Reed%E2%80%93Solomon_error_correction)
+- Chen, Jinyuan. "Optimal Error-Free Multi-Valued Byzantine Agreement", DISC 2021 —
+  the COOL protocol, which uses Reed-Solomon error correction to bound the communication
+  cost of agreement.  (for a more digestable read: https://decentralizedthoughts.github.io/2025-08-01-graded-dispersal/)
 
 
 ## Author
