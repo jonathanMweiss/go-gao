@@ -44,10 +44,7 @@ func TestNewCodeRejectsBadSizes(t *testing.T) {
 				prime = field.NTTFriendlyPrime
 			}
 
-			f, err := field.NewPrimeField(prime)
-			require.NoError(t, err)
-
-			_, err = NewCode(f, tc.n, tc.k, tc.opts...)
+			_, err := NewCode(newfield(t, prime), tc.n, tc.k, tc.opts...)
 			assert.ErrorIs(t, err, tc.want)
 		})
 	}
@@ -63,11 +60,6 @@ func newfield(t testing.TB, prime uint64) *field.PrimeField {
 	}
 
 	return f
-}
-func ringOver(t testing.TB, prime uint64) *field.PolyRing {
-	t.Helper()
-
-	return field.NewPolyRing(newfield(t, prime))
 }
 
 // TestNewCodeSelectsStrategy: the evaluator is chosen for the caller, so the choice must

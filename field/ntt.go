@@ -269,6 +269,9 @@ func bitReverseInPlace(xs []uint64) {
 // nttRecursive is the textbook recursive NTT, kept as the reference the iterative
 // [PolyRing.NttForward] and [PolyRing.NttBackward] are derived from.
 //
+// readded after it was deleted (in favor of the iterative version in the init commit)
+// because it is a clear and coherent reference for the algorithm.
+//
 // len(a) must be a power of two that the field admits a transform of; anything else is
 // a programming error and panics.
 func nttRecursive(f Field, a []uint64) []uint64 {
