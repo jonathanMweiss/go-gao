@@ -41,9 +41,6 @@ Newer protocols, in the [COOL](https://drops.dagstuhl.de/storage/00lipics/lipics
 
 **Verifiable secret sharing over asynchronous networks.** See Ben-Or, Canetti and
 Goldreich, ["Asynchronous secure computation"](https://dl.acm.org/doi/10.1145/167088.167109)
-(STOC 1993), and Cachin, Kursawe, Lysyanskaya and Strobl,
-["Asynchronous verifiable secret sharing and proactive cryptosystems"](https://dl.acm.org/doi/10.1145/586110.586124)
-(CCS 2002).
 
 When the damaged positions *are* known, a disk failed or a packet never arrived, an
 erasure code is the better tool (see [below](#comparison-with-erasure-coding-libraries)).
