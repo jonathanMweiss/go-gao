@@ -113,9 +113,9 @@ decoded, err := code.Decode(codeword, lost)
 Whatever the slice holds at a declared index is ignored, so there is no need to blank
 those entries first. Pass the zero `ErasureSet` when nothing is missing.
 
-`Erasures` does the work the positions imply — building the locator and evaluating it —
-which is the expensive half of an erasure decode and does not depend on the received
-word. Words that lost the same positions share one set:
+`Erasures` does the work the positions imply — building the locator, evaluating it, and
+inverting it as a divisor — which is the expensive half of an erasure decode and does
+not depend on the received word. Words that lost the same positions share one set:
 
 ```go
 lost, err := code.Erasures(3, 17, 42)
@@ -126,9 +126,8 @@ for _, word := range words {
 ```
 
 That is the usual shape when a node or a disk goes down: every codeword striped across
-it loses the same index. Sharing the set is worth about **1.3x** on a batch — decoding
-64 words at `n=8192, k=4096` takes 100.8 ms with one set against 128.6 ms with one per
-word.
+it loses the same index. Sharing the set is worth about **3x** on a batch — decoding 64
+words at `n=8192, k=4096` takes 42.9 ms with one set against 130.2 ms with one per word.
 
 A set suits any code built with the same modulus, `n`, `k` and strategy, so the two ends
 of a link can each build their own code and still share one.
@@ -263,9 +262,34 @@ budget units per error against one per erasure. It also accepts erasures, so a c
 who does know some positions pays the lower price for them.
 
 Where an erasure code is the better fit: whole shards lost at known positions, large
-payloads, byte-oriented transport; it is also considerably faster, being built on a
-binary field with SIMD assembly and amortising one pass over many independent codewords.
-A prime field buys the error correction and pays for it in throughput.
+payloads, byte-oriented transport. A prime field buys the error correction and pays for
+it in throughput.
+
+### Measured
+
+Erasure recovery at `n, k = 256, 128`, losing 64 of the 256 positions, one core, in MB/s
+of payload recovered. `klauspost` is pinned with `WithMaxGoroutines(1)`; go-gao reuses
+one `ErasureSet` across the batch.
+
+| codewords sharing the loss | go-gao | klauspost |
+|---|---:|---:|
+| 1 | **46.0** | 5.1 |
+| 7 | **45.6** | 24.6 |
+| 16 | **45.5** | 40.3 |
+| 24 | 45.4 | **49.1** |
+| 64 | 45.7 | **283.8** |
+| 1024 | 44.5 | **876.4** |
+
+A klauspost shard of S bytes is S independent codewords advanced in lockstep, so its
+batch width is its shard size, and its throughput climbs with it. go-gao is flat: an
+`ErasureSet` shares the locator and the divisor, but each word still needs its own
+transform. The two cross at roughly 20 codewords.
+
+Two caveats on reading this. Building the set costs about 1.9x one decode, so a
+single one-shot decode that cannot reuse it runs at 16 MB/s rather than 46 — most of
+the gain is back by 8 to 16 words. And every klauspost figure here is erasure-only:
+at no batch width does it correct an error, because locating one is not something it
+attempts.
 
 ## Explanation about the decoding logic
 GAO used a strong assumption:

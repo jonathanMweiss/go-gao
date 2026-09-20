@@ -453,11 +453,11 @@ func (gao *Code) erasureOnlyMessage(g1 *field.Polynomial, erasures ErasureSet) (
 		return nil, nil, false
 	}
 
-	if g1.Degree() >= gao.K()+erasures.s.Degree() {
+	if g1.Degree() >= gao.K()+erasures.sDeg {
 		return nil, nil, false
 	}
 
-	f, r = gao.pr.Div(g1, erasures.s)
+	f, r = gao.pr.DivBy(g1, erasures.div)
 	// Scaling by S zeroed the erased positions, so g1 vanishes there and S always divides it.
 	// should never happen, but check anyway.
 	if !r.IsZero() {
@@ -488,7 +488,7 @@ func (gao *Code) recoverMessage(g1 *field.Polynomial, erasures ErasureSet, stopD
 		return nil, nil, ErrDecoding
 	}
 
-	f, rem = pr.Div(G, erasures.s)
+	f, rem = pr.DivBy(G, erasures.div)
 
 	return f, rem, nil
 }

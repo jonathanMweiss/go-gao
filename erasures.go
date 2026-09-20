@@ -12,8 +12,9 @@ import (
 //
 // That work is the expensive half of an erasure decode and none of it depends on the
 // received word: building the locator S(x) = product of (x - xi) over the erased points,
-// then evaluating it at every evaluation point. Words that lost the same positions can
-// therefore share one set:
+// evaluating it at every evaluation point, and inverting its reversal as a power series
+// so that dividing a word by it costs one multiplication. Words that lost the same
+// positions can therefore share one set:
 //
 //	es, err := code.Erasures(3, 17, 42)
 //	for _, word := range words {
@@ -30,9 +31,11 @@ type ErasureSet struct {
 	params codeParams
 	at     []int
 
-	// s is the erasure locator, sVals is s evaluated at every point of the code.
-	s     *field.Polynomial
+	// sVals is the erasure locator evaluated at every point of the code, and div is that
+	// same locator prepared as a divisor, since every word in a batch is divided by it.
 	sVals []uint64
+	div   *field.DivisorCache
+	sDeg  int
 
 	stopDegree int
 }
@@ -52,18 +55,21 @@ func (gao *Code) Erasures(at ...int) (ErasureSet, error) {
 		return ErasureSet{}, nil
 	}
 
-	s := gao.createErasureLocator(erased, gao.xs)
+	locator := gao.createErasureLocator(erased, gao.xs)
 
-	sVals, err := gao.evaluateEverywhere(s)
+	sVals, err := gao.evaluateEverywhere(locator)
 	if err != nil {
 		return ErasureSet{}, err
 	}
 
+	// A decode divides by the locator once per word, and every such quotient is the
+	// message, so k coefficients is the longest one a successful decode produces.
 	return ErasureSet{
 		params: gao.params(),
 		at:     erased,
-		s:      s,
 		sVals:  sVals,
+		div:    gao.pr.NewDivisorCache(locator, gao.K()),
+		sDeg:   locator.Degree(),
 		// each erasure raises the stop degree by half of what an error does.
 		stopDegree: (gao.N() + gao.K() + len(erased)) / 2,
 	}, nil
@@ -81,7 +87,7 @@ func (e ErasureSet) Len() int { return len(e.at) }
 
 // empty reports whether the set declares no erasures, in which case none of the derived
 // fields are set and the decode takes its error-only path.
-func (e ErasureSet) empty() bool { return e.s == nil }
+func (e ErasureSet) empty() bool { return e.div == nil }
 
 // codeParams is everything the contents of an ErasureSet depend on. The locator and its
 // evaluations follow from the modulus and the evaluation points, and the stop degree
