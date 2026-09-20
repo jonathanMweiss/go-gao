@@ -102,13 +102,13 @@ func FuzzRoundTrip(fz *testing.F) {
 		rng := rand.New(rand.NewSource(int64(corruptSeed)))
 		erasedAt := damageCodeword(f, rng, codeword, errors, erasures)
 
-		decoded, err := code.Decode(codeword, erasedAt...)
+		decoded, err := code.Decode(codeword, mustErasures(t, code, erasedAt...))
 		require.NoError(t, err, "%d errors + %d erasures is within the budget of %d", errors, erasures, budget)
 		require.Equal(t, data, decoded, "Decode must return the message unchanged, at length k")
 
 		// Decoding is a pure function of the codeword and the erasure list: the same
 		// input decodes the same way, and the caller's slice survives it.
-		again, err := code.Decode(codeword, erasedAt...)
+		again, err := code.Decode(codeword, mustErasures(t, code, erasedAt...))
 		require.NoError(t, err)
 		require.Equal(t, decoded, again, "Decode must not depend on or disturb its input")
 	})

@@ -87,7 +87,7 @@ func main() {
 		codeword[i] = 12345
 	}
 
-	decoded, _ := code.Decode(codeword)
+	decoded, _ := code.Decode(codeword, gao.ErasureSet{})
 	fmt.Println(decoded) // [10 20 30 40]
 }
 ```
@@ -103,14 +103,35 @@ run to $2^{32}$ points.
 ```go
 codeword, _ := code.Encode(data)
 
-codeword[0] = 0                           // value irrelevant; index 0 is declared
-codeword[1] = 999                         // an error: not declared
+codeword[0] = 0     // value irrelevant; index 0 is declared
+codeword[1] = 999   // an error: not declared
 
-decoded, err := code.Decode(codeword, 0)  // costs 1 of the n-k budget, vs 2 for the error
+lost, err := code.Erasures(0)         // 1 of the n-k budget, vs 2 for the error
+decoded, err := code.Decode(codeword, lost)
 ```
 
 Whatever the slice holds at a declared index is ignored, so there is no need to blank
-those entries first.
+those entries first. Pass the zero `ErasureSet` when nothing is missing.
+
+`Erasures` does the work the positions imply — building the locator and evaluating it —
+which is the expensive half of an erasure decode and does not depend on the received
+word. Words that lost the same positions share one set:
+
+```go
+lost, err := code.Erasures(3, 17, 42)
+
+for _, word := range words {
+	msg, err := code.Decode(word, lost)
+}
+```
+
+That is the usual shape when a node or a disk goes down: every codeword striped across
+it loses the same index. Sharing the set is worth about **1.3x** on a batch — decoding
+64 words at `n=8192, k=4096` takes 100.8 ms with one set against 128.6 ms with one per
+word.
+
+A set suits any code built with the same modulus, `n`, `k` and strategy, so the two ends
+of a link can each build their own code and still share one.
 
 If you received only some of the symbols — a k-of-n fetch, say — place what you have
 and name the rest:
@@ -130,41 +151,48 @@ for i, ok := range seen {
 	}
 }
 
-decoded, err := code.Decode(ys, erased...)
+lost, err := code.Erasures(erased...)
+decoded, err := code.Decode(ys, lost)
 ```
 
 
 ### Bytes
-This is the more engineer friendly interface.
-`EncodeBytes` returns the codeword already packed into bytes, ready to send or store.
-`DecodeBytes` takes those bytes back:
+This is the more engineer friendly interface. `code.Bytes()` is a view of the same code
+that works in bytes: `Encode` returns the codeword already packed, ready to send or
+store, and `Decode` takes those bytes back.
 
 ```go
 code, _ := gao.NewCode(f, 16, 4)
+bc := code.Bytes()
 
-code.MaxBytes() // 28: k symbols carrying 7 payload bytes each
+bc.MaxBytes() // 28: k symbols carrying 7 payload bytes each
 
-raw, err := code.EncodeBytes([]byte("attack at dawn"))
+raw, err := bc.Encode([]byte("attack at dawn"))
 // len(raw) == 128
 
-got, err := code.DecodeBytes(raw)
+got, err := bc.Decode(raw, gao.ErasureSet{})
 // got[:14] == "attack at dawn"
 ```
 
-`DecodeBytes` returns `MaxBytes()` bytes, zero-padded past whatever was encoded. The
+`Decode` returns `MaxBytes()` bytes, zero-padded past whatever was encoded. The
 padding is indistinguishable from payload afterwards, so keep the original length and
 slice the result.
 
 Byte ranges known to be lost (a dropped packet, a bad sector) are named as erasures,
-which cost half as much of the budget as an undeclared corruption:
+which cost half as much of the budget as an undeclared corruption. A symbol any range
+touches is erased whole, and ranges may overlap or repeat:
 
 ```go
-got, err := code.DecodeBytes(raw, gao.ByteRange{Off: 24, Len: 16})
+lost, err := bc.Erasures(gao.ByteRange{Off: 24, Len: 16})
+got, err := bc.Decode(raw, lost)
 ```
+
+The set is the same type either way, so a batch sharing a loss pattern reuses it exactly
+as the symbol interface does.
 
 ### Too many errors
 
-Past the budget `Decode` or `DecodeBytes` usually returns `ErrDecoding`. It cannot always tell: with enough errors a received word lands closer to a *different* valid codeword, and the decoder returns that message. This is a property of Reed-Solomon codes, not of this implementation.
+Past the budget `Decode` usually returns `ErrDecoding`. It cannot always tell: with enough errors a received word lands closer to a *different* valid codeword, and the decoder returns that message. This is a property of Reed-Solomon codes, not of this implementation.
 
 ### Choosing parameters
 
@@ -208,6 +236,8 @@ Invalid parameters are reported at construction: `NewCode` returns `ErrUnsupport
 ### Notes
 
 - A `*Code` is immutable after construction and safe for concurrent use.
+- An `ErasureSet` is read-only once built, so one set may be shared across goroutines
+  as well as across codewords.
 - `Decode` never modifies its input.
 - `Decode` returns a message of exactly length `k`, zero-padded when the recovered
   message has high-order zero symbols. `[]uint64{10, 20, 30, 0}` decodes back to four

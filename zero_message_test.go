@@ -58,7 +58,7 @@ func TestZeroMessageDecodes(t *testing.T) {
 		t.Run(tc.name+"/untouched", func(t *testing.T) {
 			codeword, erased := corrupt(t, 0, 0)
 
-			decoded, err := code.Decode(codeword, erased...)
+			decoded, err := code.Decode(codeword, mustErasures(t, code, erased...))
 			require.NoError(t, err)
 			assert.Equal(t, zero, decoded, "must return k zeros, not an empty slice")
 		})
@@ -66,7 +66,7 @@ func TestZeroMessageDecodes(t *testing.T) {
 		t.Run(tc.name+"/errors at the budget", func(t *testing.T) {
 			codeword, erased := corrupt(t, code.MaxErrors(), 0)
 
-			decoded, err := code.Decode(codeword, erased...)
+			decoded, err := code.Decode(codeword, mustErasures(t, code, erased...))
 			require.NoError(t, err, "%d errors is exactly MaxErrors", code.MaxErrors())
 			assert.Equal(t, zero, decoded)
 		})
@@ -74,7 +74,7 @@ func TestZeroMessageDecodes(t *testing.T) {
 		t.Run(tc.name+"/erasures at the budget", func(t *testing.T) {
 			codeword, erased := corrupt(t, 0, budget)
 
-			decoded, err := code.Decode(codeword, erased...)
+			decoded, err := code.Decode(codeword, mustErasures(t, code, erased...))
 			require.NoError(t, err, "%d erasures is exactly n-k", budget)
 			assert.Equal(t, zero, decoded)
 		})
@@ -85,7 +85,7 @@ func TestZeroMessageDecodes(t *testing.T) {
 
 			codeword, erased := corrupt(t, errs, erasures)
 
-			decoded, err := code.Decode(codeword, erased...)
+			decoded, err := code.Decode(codeword, mustErasures(t, code, erased...))
 			require.NoError(t, err, "2*%d+%d is within %d", errs, erasures, budget)
 			assert.Equal(t, zero, decoded)
 		})
@@ -98,7 +98,7 @@ func TestZeroMessageDecodes(t *testing.T) {
 			codeword, erased := corrupt(t, code.MaxErrors()+1, 0)
 
 			require.NotPanics(t, func() {
-				_, err := code.Decode(codeword, erased...)
+				_, err := code.Decode(codeword, mustErasures(t, code, erased...))
 				assert.ErrorIs(t, err, ErrDecoding)
 			})
 		})
@@ -129,7 +129,7 @@ func TestNearZeroMessagesRoundTrip(t *testing.T) {
 
 				corruptCodeword(f, testRNG(t), codeword, code.MaxErrors())
 
-				decoded, err := code.Decode(codeword)
+				decoded, err := code.Decode(codeword, ErasureSet{})
 				require.NoError(t, err)
 				assert.Equal(t, data, decoded)
 			})

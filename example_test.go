@@ -38,7 +38,7 @@ func Example() {
 		codeword[i] = 12345
 	}
 
-	decoded, err := code.Decode(codeword)
+	decoded, err := code.Decode(codeword, gao.ErasureSet{})
 	if err != nil {
 		panic(err)
 	}
