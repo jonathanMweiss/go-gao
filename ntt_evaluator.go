@@ -45,13 +45,7 @@ func newNttEvaluator(pr *field.PolyRing, n int) (*nttEvaluator, error) {
 
 var errNTooSmallForNTT = errors.New("the NTT needs a codeword length of at least 2")
 
-// nttSupportsSize reports whether the field admits both transforms this strategy needs:
-// an n-point one to evaluate with, and a 2n-point one to decode with. Each needs a
-// power of two dividing p-1, so the 2n one binds.
-//
-// Decoding needs 2n because the partial GCD's longest convolution measures 1.25n. With
-// only the n-point transform that multiplication drops to schoolbook inside a recursion
-// built to avoid it, slower than not recursing at all, so half support is no support.
+// nttSupportsSize reports whether the field admits both NTT transforms this strategy needs.
 func nttSupportsSize(fld field.Field, n int) error {
 	if n <= 0 {
 		return errNonPositiveN
