@@ -53,15 +53,9 @@ func (gao *Code) Erasures(at ...int) (ErasureSet, error) {
 		return ErasureSet{}, nil
 	}
 
-	s := gao.createErasureLocator(erased, gao.xs)
+	s := gao.createErasureLocator(erased)
 
-	// EvaluatePolynomial transforms its argument in place and takes its length as the
-	// point count, so s is padded to n and handed over as a copy: the set keeps s for
-	// the divisions in erasureOnlyMessage and recoverMessage.
-	inner := make([]uint64, gao.N())
-	copy(inner, s.NoCopySlice())
-
-	sVals, err := gao.eval.EvaluatePolynomial(gao.pr.NewPolynomial(inner, false))
+	sVals, err := gao.eval.EvaluatePolynomial(s, gao.N())
 	if err != nil {
 		return ErasureSet{}, err
 	}
@@ -122,13 +116,13 @@ func (e ErasureSet) validFor(gao *Code) error {
 // This is similar to the locator Polynomial g0=product of (x - xi) for all evaluation points, but only for the erased indices.
 // Note S(x) is distinct from the error locator E(x) of the README: E is never formed explicitly, it
 // falls out of the partial GCD as the Bezout coefficient v.
-func (gao *Code) createErasureLocator(erasedIndices []int, xs []uint64) *field.Polynomial {
+func (gao *Code) createErasureLocator(erasedIndices []int) *field.Polynomial {
 	f := gao.pr.GetField()
 	polys := make([]*field.Polynomial, len(erasedIndices))
 	for i, idx := range erasedIndices {
 		coeffs := make([]uint64, 2)
 		coeffs[1] = 1
-		coeffs[0] = f.Neg(f.Reduce(xs[idx]))
+		coeffs[0] = f.Neg(f.Reduce(gao.xs[idx]))
 		polys[i] = gao.pr.NewPolynomial(coeffs, false)
 	}
 

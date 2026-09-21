@@ -5,6 +5,8 @@ package gao
 
 import (
 	"errors"
+	"slices"
+	"sync"
 
 	"github.com/jonathanmweiss/go-gao/field"
 )
@@ -22,8 +24,9 @@ type evaluationMap interface {
 	// The returned slice is owned by the caller and safe to modify.
 	EvaluationPoints(n int) (xs []uint64)
 
-	// might change the polynomial
-	EvaluatePolynomial(p *field.Polynomial) (ys []uint64, err error)
+	// EvaluatePolynomial returns p evaluated at the n evaluation points, zero-padding
+	// p where it is shorter. It leaves p untouched, so a caller may keep it.
+	EvaluatePolynomial(p *field.Polynomial, n int) (ys []uint64, err error)
 
 	// The locator polynomial for the evaluation points.
 	// Namely, given the evaluation points x_1, ..., x_n, the locator polynomial is
@@ -39,6 +42,44 @@ type evaluationMap interface {
 
 var errNonPositiveN = errors.New("codeword length `n` must be positive")
 
+// pointCache memoizes evaluation points per codeword length. An evaluator is shared by
+// a Code, which is safe for concurrent use, and deriving the points costs a whole NTT
+// for nttEvaluator.
+type pointCache struct {
+	mu sync.RWMutex
+	m  map[int][]uint64
+}
+
+// get returns the cached points for n, deriving them with build on a miss. build runs
+// outside the lock, so two racing misses may both derive; the points are deterministic,
+// and the first stored wins for everyone.
+func (c *pointCache) get(n int, build func() []uint64) []uint64 {
+	c.mu.RLock()
+	xs, ok := c.m[n]
+	c.mu.RUnlock()
+
+	if ok {
+		return xs
+	}
+
+	xs = build()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if stored, ok := c.m[n]; ok {
+		return stored
+	}
+
+	if c.m == nil {
+		c.m = make(map[int][]uint64, 1)
+	}
+
+	c.m[n] = xs
+
+	return xs
+}
+
 // slowEvaluator evaluates polynomials pointwise at the points 1, 2, ..., n using
 // classical arithmetic. Unlike nttEvaluator it places no constraint on n beyond
 // 0 < n < p, so it is the option for a codeword length that is not a power of two
@@ -53,7 +94,8 @@ var errNonPositiveN = errors.New("codeword length `n` must be positive")
 // A slowEvaluator adds no mutable state of its own, and the ring it borrows is safe for
 // concurrent use, so an evaluator is too.
 type slowEvaluator struct {
-	pr *field.PolyRing
+	pr     *field.PolyRing
+	points pointCache
 }
 
 func newSlowEvaluator(pr *field.PolyRing) *slowEvaluator {
@@ -61,14 +103,21 @@ func newSlowEvaluator(pr *field.PolyRing) *slowEvaluator {
 }
 
 // EvaluationPoints returns the points 1, 2, ..., n used to evaluate a codeword.
-// Each call builds a fresh slice.
+// Each call returns a fresh slice, cloned from the cached one.
 func (e *slowEvaluator) EvaluationPoints(n int) []uint64 {
-	points := make([]uint64, n)
-	for i := range points {
-		points[i] = uint64(i + 1)
-	}
+	return slices.Clone(e.cachedPoints(n))
+}
 
-	return points
+// cachedPoints returns the shared points for n, which callers must not modify.
+func (e *slowEvaluator) cachedPoints(n int) []uint64 {
+	return e.points.get(n, func() []uint64 {
+		xs := make([]uint64, n)
+		for i := range xs {
+			xs[i] = uint64(i + 1)
+		}
+
+		return xs
+	})
 }
 
 var errNotInCoefficientForm = errors.New("polynomial not in coefficient form")
@@ -77,16 +126,17 @@ func (e *slowEvaluator) PrimeField() field.Field {
 	return e.pr.GetField()
 }
 
-func (e *slowEvaluator) EvaluatePolynomial(p *field.Polynomial) ([]uint64, error) {
+// EvaluatePolynomial evaluates p pointwise, which reads p without modifying it. A p
+// shorter than n needs no padding here: the missing coefficients are zero either way.
+func (e *slowEvaluator) EvaluatePolynomial(p *field.Polynomial, n int) ([]uint64, error) {
 	if !p.IsCoeffMode() {
 		return nil, errNotInCoefficientForm
 	}
 
-	points := e.EvaluationPoints(len(p.ToSlice()))
-	values := make([]uint64, len(points))
+	values := make([]uint64, n)
 
 	pr := e.pr
-	for i, x := range points {
+	for i, x := range e.cachedPoints(n) {
 		values[i] = pr.Evaluate(p, x)
 	}
 
@@ -94,7 +144,7 @@ func (e *slowEvaluator) EvaluatePolynomial(p *field.Polynomial) ([]uint64, error
 }
 
 func (e *slowEvaluator) GenerateLocatorPolynomial(n int) *field.Polynomial {
-	xs := e.EvaluationPoints(n)
+	xs := e.cachedPoints(n)
 	polys := make([]*field.Polynomial, n)
 
 	f := e.pr.GetField()

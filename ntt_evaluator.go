@@ -5,6 +5,7 @@ package gao
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/jonathanmweiss/go-gao/field"
 )
@@ -16,7 +17,8 @@ import (
 // It requires n to be a power of two dividing p-1. NewCode checks this and
 // reports ErrUnsupportedSize rather than letting the evaluator fail later.
 type nttEvaluator struct {
-	pr *field.PolyRing // safe for concurrent use.
+	pr     *field.PolyRing // safe for concurrent use.
+	points pointCache
 }
 
 func newNttEvaluator(pr *field.PolyRing) *nttEvaluator {
@@ -55,37 +57,53 @@ func (e *nttEvaluator) supportsSize(n int) error {
 }
 
 // EvaluationPoints returns the n-th roots of unity used as evaluation points.
-// Each call builds a fresh slice, so the caller may modify it freely.
+// Each call returns a fresh slice, cloned from the cached one, so the caller may modify
+// it freely.
 //
 // It panics if the field does not admit an NTT of length n. Construct the code through
 // NewCode, which rejects such an n with ErrUnsupportedSize.
 func (e *nttEvaluator) EvaluationPoints(n int) []uint64 {
-	if err := e.supportsSize(n); err != nil {
-		panic(fmt.Sprintf("gao: nttEvaluator cannot evaluate at %d points: %v", n, err))
-	}
+	return slices.Clone(e.cachedPoints(n))
+}
 
-	// The roots of unity are the NTT of p(x) = x.
-	inner := make([]uint64, n)
-	inner[1] = 1
-	p := e.pr.NewPolynomial(inner, false)
+// cachedPoints returns the shared roots of unity for n, which callers must not modify.
+// Deriving them is a full transform, so they are derived once per length.
+func (e *nttEvaluator) cachedPoints(n int) []uint64 {
+	return e.points.get(n, func() []uint64 {
+		if err := e.supportsSize(n); err != nil {
+			panic(fmt.Sprintf("gao: nttEvaluator cannot evaluate at %d points: %v", n, err))
+		}
 
-	if err := e.pr.NttForward(p); err != nil {
-		panic(fmt.Sprintf("gao: NTT of length %d failed: %v", n, err))
-	}
+		// The roots of unity are the NTT of p(x) = x.
+		inner := make([]uint64, n)
+		inner[1] = 1
+		p := e.pr.NewPolynomial(inner, false)
 
-	return p.NoCopySlice()
+		if err := e.pr.NttForward(p); err != nil {
+			panic(fmt.Sprintf("gao: NTT of length %d failed: %v", n, err))
+		}
+
+		return p.NoCopySlice()
+	})
 }
 
 func (e *nttEvaluator) PrimeField() field.Field {
 	return e.pr.GetField()
 }
 
-func (e *nttEvaluator) EvaluatePolynomial(p *field.Polynomial) ([]uint64, error) {
-	if err := e.pr.NttForward(p); err != nil {
+// EvaluatePolynomial transforms a copy of p: NttForward works in place and its length
+// sets the transform's, so the copy both pads p to n and leaves the caller's polynomial
+// intact.
+func (e *nttEvaluator) EvaluatePolynomial(p *field.Polynomial, n int) ([]uint64, error) {
+	inner := make([]uint64, n)
+	copy(inner, p.NoCopySlice())
+
+	work := e.pr.NewPolynomial(inner, false)
+	if err := e.pr.NttForward(work); err != nil {
 		return nil, err
 	}
 
-	return p.NoCopySlice(), nil
+	return work.NoCopySlice(), nil
 }
 
 func (e *nttEvaluator) GenerateLocatorPolynomial(n int) *field.Polynomial {
