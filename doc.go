@@ -4,25 +4,38 @@
 /*
 Package gao implements Reed-Solomon error correction using Gao's decoder.
 
-Erasure coding repairs symbols only when you already know which ones are
-missing. This package also repairs symbols that are silently wrong at
-positions you do not know: the decoder finds the error locations itself.
+It repairs symbols that are silently wrong at positions you do not know: the
+decoder finds the error locations itself. Where you do know the positions,
+declare them as erasures, which cost half as much budget and decode faster.
 
-Symbols are elements of a prime field up to 63 bits wide, chosen by the
-caller. Byte-oriented Reed-Solomon fixes that alphabet at GF(2^8).
+In this library, symbols are elements of a prime field up to 63 bits wide, chosen by the
+caller.
 
 # Codes
 
-A code is built over a prime field and fixes two lengths: n symbols to a
-codeword, k of them data. Encoding treats the k data symbols as the
-coefficients of a polynomial and evaluates it at n points; decoding recovers
-those coefficients from the n possibly corrupted values.
+The library works at two levels:
 
-	f, err := field.NewPrimeField(65537)
+  - [ByteCode], the higher one, when you care about bytes only.
+  - [Code], the lower one, when you want the symbols (field elements)
+    directly.
+
+If you are unsure, start with ByteCode and drop to Code when you need the
+symbols.
+
+Both are built over a prime field and fix two lengths: n symbols to a
+codeword, k of them data. The difference n-k is the redundancy, so a larger n
+buys budget and a larger k spends it on payload.
+
+Building a Code:
+
+	f, err := field.NewPrimeField(field.NTTFriendlyPrime) // or any other prime
 	if err != nil {
 		return err
 	}
 
+	// here n=16, k=4, but you can also try with
+	// other values. choose powers of two for high performance with
+	// FFT-like algorithms (NTT).
 	code, err := gao.NewCode(f, 16, 4)
 	if err != nil {
 		return err
@@ -33,11 +46,25 @@ those coefficients from the n possibly corrupted values.
 [NewCode] reports bad parameters immediately, as [ErrNonPositiveK],
 [ErrNSmallerThanK] or [ErrUnsupportedSize], rather than failing later.
 
+A ByteCode is a view of a Code, so it starts from one:
+
+	bc := code.Bytes()
+
+	encoded, err := bc.Encode([]byte("My message"))
+
+A symbol carries whole bytes of payload and occupies whole bytes on the wire,
+both sized against the modulus. Over the 57-bit NTTFriendlyPrime that is 7
+payload bytes in an 8-byte symbol, so the code above takes at most 28 bytes
+([ByteCode.MaxBytes], k times 7) and produces 128 (n times 8). A short payload
+is zero-padded, and the padding is indistinguishable from payload afterwards:
+carry the original length and slice the result.
+
 # The decoding budget
 
 A corrupted symbol at an unknown position is an error; one at a position the
-caller knows is an erasure. Erasures are half the price, because the decoder
-does not have to spend budget locating them. Decoding succeeds while
+caller knows, and declares, is an erasure. Erasures are half the price,
+because the decoder does not have to spend budget locating them. Decoding
+succeeds while
 
 	2*errors + erasures <= n-k
 
@@ -46,60 +73,56 @@ does not have to spend budget locating them. Decoding succeeds while
 Past the budget [Code.Decode] usually returns [ErrDecoding], but it cannot
 always tell: with enough errors a received word lands closer to a different
 valid codeword, and the decoder returns a confidently wrong message. That is
-inherent to the code, not to this implementation.
+inherent to Reed-Solomon codes, not to this implementation.
 
 # Codewords
 
-Codewords are positional. [Code.Encode] returns n values, where index i is the
-evaluation at [Code.EvaluationPoints] index i, and [Code.Decode] expects them
-back in that order.
+Codewords are positional, and reordering one makes it invalid. [Code.Encode]
+returns n values, where index i is the evaluation at [Code.EvaluationPoints]
+index i, and [Code.Decode] expects them back in that order. Store or split
+them as you like, and reassemble them in the same order before decoding:
 
-Erasures are named by index through [Code.Erasures]: a set built from 3 and 7
-declares those positions unusable, whatever ys happens to hold at them, so
-there is no need to blank them first. Pass the zero [ErasureSet] when nothing
-is missing.
+	codeword, err := code.Encode([]uint64{10, 20, 30, 40})
+
+	// codeword[i] goes to disk i, and comes back at index i.
+	msg, err := code.Decode(codeword, gao.ErasureSet{})
+
+A codeword of any other length is rejected with [ErrMismatchedLengths], since
+no amount of correction fixes framing. Decode returns a message of exactly
+length k, zero-padded when the recovered message has high-order zero symbols.
+
+# Erasures
+
+As stated above, an erasure is a position the caller knows is unusable:
+a missing symbol, or a range of bytes missing from a ByteCode codeword.
+Whatever the codeword holds there is ignored,
+so there is no need to blank it first, and the zero [ErasureSet] declares
+nothing missing.
 
 Building the set is the expensive half of an erasure decode and depends on the
-positions alone. Words that lost the same positions share one:
+positions alone, so words that lost the same positions should share the ErasureSet:
 
+	// symbols 3 and 7 are unusable.
 	lost, err := code.Erasures(3, 7)
 	for _, word := range words {
 		msg, err := code.Decode(word, lost)
 	}
 
-A set suits any code built with the same modulus, n, k and evaluation strategy.
+[ByteCode.Erasures] takes byte ranges instead and builds the same set. A
+symbol any range touches is erased whole, and ranges may overlap, repeat, or
+fall partly outside the codeword:
 
-Decode returns a message of exactly length k, zero-padded when the recovered
-message has high-order zero symbols.
+	lost, err := bc.Erasures(
+		gao.ByteRange{Off: 6, Len: 9},
+		gao.ByteRange{Off: 17, Len: 4},
+	)
 
-# Bytes
+	for _, word := range byteWords {
+		msg, err := bc.Decode(word, lost)
+	}
 
-[Code.Bytes] is a view of the same code that works in bytes rather than
-symbols. [ByteCode.Encode] packs the payload into symbols and serialises the
-codeword, and [ByteCode.Decode] takes those bytes back:
-
-	bc := code.Bytes()
-
-	raw, err := bc.Encode([]byte("attack"))
-	got, err := bc.Decode(raw, gao.ErasureSet{})
-
-A symbol carries whole bytes of payload and occupies whole bytes on the wire,
-both sized against the modulus. Over p=65537 that is 2 payload bytes in a
-3-byte symbol, so the code above takes at most 8 bytes ([ByteCode.MaxBytes],
-k times 2) and produces 48 (n times 3).
-
-Decode returns MaxBytes bytes whatever was encoded, zero-padded past the
-payload, and the padding is indistinguishable from payload afterwards: carry
-the original length and slice the result. A codeword that is not the length
-Encode produces is rejected with [ErrMismatchedLengths].
-
-Lost byte ranges are named through [ByteCode.Erasures], which builds the same
-[ErasureSet] the symbol interface takes, so a batch sharing a loss pattern
-reuses one set either way. A symbol any range touches is erased whole, and
-ranges may overlap, repeat, or fall partly outside the codeword:
-
-	lost, err := bc.Erasures(gao.ByteRange{Off: 6, Len: 9})
-	got, err := bc.Decode(raw, lost)
+A set suits any code built with the same modulus, n, k and evaluation
+strategy (see next section).
 
 # Evaluation strategies
 
@@ -122,6 +145,9 @@ To get the NTT, choose a prime with a large power of two dividing p-1, and
 size it against 2n: evaluating needs an n-point transform, and decoding
 needs a 2n-point one for the products inside the partial GCD, so the
 strategy requires both.
+
+If you are not sure; use field.NTTFriendlyPrime, which is 57 bits wide and
+can support large n,k values.
 
 # Input mutation and concurrency
 
