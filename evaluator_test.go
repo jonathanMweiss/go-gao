@@ -13,16 +13,35 @@ import (
 	"github.com/jonathanmweiss/go-gao/field"
 )
 
-// TestEvaluationPointsCacheIsConcurrencySafe drives a cold cache from many goroutines at
+// TestEvaluationPointsAreDerivedOnce pins the memo: every call hands back the same
+// slice, so an nttEvaluator runs its transform once rather than per call.
+func TestEvaluationPointsAreDerivedOnce(t *testing.T) {
+	const n = 32
+
+	pr := field.NewPolyRing(newfield(t, field.NTTFriendlyPrime))
+
+	ntt := newNttEvaluator(pr, n)
+	assert.Same(t, &ntt.points()[0], &ntt.points()[0])
+
+	slow := newSlowEvaluator(pr, n)
+	assert.Same(t, &slow.points()[0], &slow.points()[0])
+
+	// EvaluationPoints hands out a copy, so a caller cannot reach the shared slice.
+	xs := ntt.EvaluationPoints()
+	xs[0] = 12345
+	assert.NotEqual(t, xs, ntt.EvaluationPoints())
+}
+
+// TestEvaluationPointsAreConcurrencySafe derives the points from many goroutines at
 // once, which is the case a Code shared across goroutines can reach. Run under -race.
-func TestEvaluationPointsCacheIsConcurrencySafe(t *testing.T) {
+func TestEvaluationPointsAreConcurrencySafe(t *testing.T) {
 	const n = 64
 
 	pr := field.NewPolyRing(newfield(t, field.NTTFriendlyPrime))
 
 	for name, e := range map[string]evaluationMap{
-		"ntt":       newNttEvaluator(pr),
-		"pointwise": newSlowEvaluator(pr),
+		"ntt":       newNttEvaluator(pr, n),
+		"pointwise": newSlowEvaluator(pr, n),
 	} {
 		t.Run(name, func(t *testing.T) {
 			var (
@@ -37,7 +56,7 @@ func TestEvaluationPointsCacheIsConcurrencySafe(t *testing.T) {
 				go func() {
 					defer wg.Done()
 
-					xs := e.EvaluationPoints(n)
+					xs := e.EvaluationPoints()
 
 					mu.Lock()
 					defer mu.Unlock()
@@ -52,27 +71,6 @@ func TestEvaluationPointsCacheIsConcurrencySafe(t *testing.T) {
 			for _, xs := range got {
 				assert.Equal(t, got[0], xs)
 			}
-
-			// each caller owns its slice: writing one must not disturb the next call.
-			got[0][0] = 12345
-			assert.NotEqual(t, got[0], e.EvaluationPoints(n))
 		})
 	}
-}
-
-// TestEvaluationPointsAreDerivedOnce pins the cache itself: every call hands back the
-// same slice, so an nttEvaluator runs its transform once per length rather than per call.
-func TestEvaluationPointsAreDerivedOnce(t *testing.T) {
-	const n = 32
-
-	pr := field.NewPolyRing(newfield(t, field.NTTFriendlyPrime))
-
-	ntt := newNttEvaluator(pr)
-	assert.Same(t, &ntt.cachedPoints(n)[0], &ntt.cachedPoints(n)[0])
-
-	slow := newSlowEvaluator(pr)
-	assert.Same(t, &slow.cachedPoints(n)[0], &slow.cachedPoints(n)[0])
-
-	// a different length gets its own entry.
-	assert.NotEqual(t, len(ntt.cachedPoints(n)), len(ntt.cachedPoints(2*n)))
 }

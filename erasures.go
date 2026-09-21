@@ -55,7 +55,7 @@ func (gao *Code) Erasures(at ...int) (ErasureSet, error) {
 
 	s := gao.createErasureLocator(erased)
 
-	sVals, err := gao.eval.EvaluateCoeffs(s.NoCopySlice(), gao.N())
+	sVals, err := gao.eval.EvaluateCoeffs(s.NoCopySlice())
 	if err != nil {
 		return ErasureSet{}, err
 	}

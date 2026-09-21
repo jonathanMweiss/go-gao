@@ -20,66 +20,28 @@ import (
 type evaluationMap interface {
 	// has access to a specific prime field.
 	PrimeField() field.Field
-	// returns the evaluation points for a polynomial of degree n.
-	// The returned slice is owned by the caller and safe to modify.
-	EvaluationPoints(n int) (xs []uint64)
+	// returns the n evaluation points, where n is the codeword length this map was
+	// built for. The returned slice is owned by the caller and safe to modify.
+	EvaluationPoints() (xs []uint64)
 
 	// EvaluateCoeffs returns the polynomial with these coefficients evaluated at the n
 	// evaluation points, zero-padding where coeffs is shorter. coeffs holds at most n
 	// values, and is read, never written, so a caller may keep it.
-	EvaluateCoeffs(coeffs []uint64, n int) (ys []uint64, err error)
+	EvaluateCoeffs(coeffs []uint64) (ys []uint64, err error)
 
 	// The locator polynomial for the evaluation points.
 	// Namely, given the evaluation points x_1, ..., x_n, the locator polynomial is
 	// L(x) = (x - x_1)(x - x_2)...(x - x_n)
-	GenerateLocatorPolynomial(n int) *field.Polynomial
+	GenerateLocatorPolynomial() *field.Polynomial
 
-	// supportsSize reports whether this map can produce n evaluation points over its
-	// field, so callers can fail with an error instead of panicking later.
-	supportsSize(n int) error
+	// supportsSize reports whether this map can produce its n evaluation points over
+	// its field, so callers can fail with an error instead of panicking later.
+	supportsSize() error
 
 	isNTT() bool
 }
 
 var errNonPositiveN = errors.New("codeword length `n` must be positive")
-
-// pointCache memoizes evaluation points per codeword length. An evaluator is shared by
-// a Code, which is safe for concurrent use, and deriving the points costs a whole NTT
-// for nttEvaluator.
-type pointCache struct {
-	mu sync.RWMutex
-	m  map[int][]uint64
-}
-
-// get returns the cached points for n, deriving them with build on a miss. build runs
-// outside the lock, so two racing misses may both derive; the points are deterministic,
-// and the first stored wins for everyone.
-func (c *pointCache) get(n int, build func() []uint64) []uint64 {
-	c.mu.RLock()
-	xs, ok := c.m[n]
-	c.mu.RUnlock()
-
-	if ok {
-		return xs
-	}
-
-	xs = build()
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if stored, ok := c.m[n]; ok {
-		return stored
-	}
-
-	if c.m == nil {
-		c.m = make(map[int][]uint64, 1)
-	}
-
-	c.m[n] = xs
-
-	return xs
-}
 
 // slowEvaluator evaluates polynomials pointwise at the points 1, 2, ..., n using
 // classical arithmetic. Unlike nttEvaluator it places no constraint on n beyond
@@ -92,33 +54,38 @@ func (c *pointCache) get(n int, build func() []uint64) []uint64 {
 //
 // The ring is the Code's own, shared rather than duplicated; see nttEvaluator.
 //
-// A slowEvaluator adds no mutable state of its own, and the ring it borrows is safe for
-// concurrent use, so an evaluator is too.
+// Its one piece of mutable state is the memo below, written once under a sync.Once, and
+// the ring it borrows is safe for concurrent use, so an evaluator is too.
 type slowEvaluator struct {
-	pr     *field.PolyRing
-	points pointCache
+	pr *field.PolyRing
+	n  int
+
+	// xs is derived on first use and never rewritten; once guards that one write.
+	once sync.Once
+	xs   []uint64
 }
 
-func newSlowEvaluator(pr *field.PolyRing) *slowEvaluator {
-	return &slowEvaluator{pr: pr}
+func newSlowEvaluator(pr *field.PolyRing, n int) *slowEvaluator {
+	return &slowEvaluator{pr: pr, n: n}
 }
 
 // EvaluationPoints returns the points 1, 2, ..., n used to evaluate a codeword.
-// Each call returns a fresh slice, cloned from the cached one.
-func (e *slowEvaluator) EvaluationPoints(n int) []uint64 {
-	return slices.Clone(e.cachedPoints(n))
+// Each call returns a fresh slice, cloned from the shared one.
+func (e *slowEvaluator) EvaluationPoints() []uint64 {
+	return slices.Clone(e.points())
 }
 
-// cachedPoints returns the shared points for n, which callers must not modify.
-func (e *slowEvaluator) cachedPoints(n int) []uint64 {
-	return e.points.get(n, func() []uint64 {
-		xs := make([]uint64, n)
-		for i := range xs {
-			xs[i] = uint64(i + 1)
+// points returns the shared evaluation points, which callers must not modify. They are
+// derived once: an evaluator serves one codeword length for its whole life.
+func (e *slowEvaluator) points() []uint64 {
+	e.once.Do(func() {
+		e.xs = make([]uint64, e.n)
+		for i := range e.xs {
+			e.xs[i] = uint64(i + 1)
 		}
-
-		return xs
 	})
+
+	return e.xs
 }
 
 func (e *slowEvaluator) PrimeField() field.Field {
@@ -127,22 +94,22 @@ func (e *slowEvaluator) PrimeField() field.Field {
 
 // EvaluateCoeffs evaluates pointwise. NewPolynomial reduces its slice in place, so the
 // coefficients are copied rather than wrapped.
-func (e *slowEvaluator) EvaluateCoeffs(coeffs []uint64, n int) ([]uint64, error) {
+func (e *slowEvaluator) EvaluateCoeffs(coeffs []uint64) ([]uint64, error) {
 	p := e.pr.NewPolynomial(slices.Clone(coeffs), false)
 
-	values := make([]uint64, n)
+	values := make([]uint64, e.n)
 
 	pr := e.pr
-	for i, x := range e.cachedPoints(n) {
+	for i, x := range e.points() {
 		values[i] = pr.Evaluate(p, x)
 	}
 
 	return values, nil
 }
 
-func (e *slowEvaluator) GenerateLocatorPolynomial(n int) *field.Polynomial {
-	xs := e.cachedPoints(n)
-	polys := make([]*field.Polynomial, n)
+func (e *slowEvaluator) GenerateLocatorPolynomial() *field.Polynomial {
+	xs := e.points()
+	polys := make([]*field.Polynomial, e.n)
 
 	f := e.pr.GetField()
 	for i, x := range xs {
@@ -159,12 +126,12 @@ func (e *slowEvaluator) GenerateLocatorPolynomial(n int) *field.Polynomial {
 
 // supportsSize accepts any positive n: the points are simply 1..n, which requires
 // nothing of the field beyond having at least n distinct non-zero elements.
-func (e *slowEvaluator) supportsSize(n int) error {
-	if n <= 0 {
+func (e *slowEvaluator) supportsSize() error {
+	if e.n <= 0 {
 		return errNonPositiveN
 	}
 
-	if uint64(n) >= e.pr.GetField().Modulus() {
+	if uint64(e.n) >= e.pr.GetField().Modulus() {
 		return errNTooLargeForField
 	}
 

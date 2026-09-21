@@ -181,8 +181,8 @@ func NewCode(f field.Field, n, k int, opts ...Option) (*Code, error) {
 		maxErrors: (n - k) / 2,
 		pr:        pr,
 		// g0(x) = (x - x_1)(x - x_2)...(x - x_n)
-		g0:           eval.GenerateLocatorPolynomial(n),
-		xs:           eval.EvaluationPoints(n),
+		g0:           eval.GenerateLocatorPolynomial(),
+		xs:           eval.EvaluationPoints(),
 		interpolator: field.NewInterpolator(pr),
 		stopDegree:   (n + k) / 2,
 	}, nil
@@ -190,19 +190,19 @@ func NewCode(f field.Field, n, k int, opts ...Option) (*Code, error) {
 
 // selectEvaluator resolves the strategy, preferring the NTT unless told otherwise.
 func selectEvaluator(pr *field.PolyRing, n int, cfg config) (evaluationMap, error) {
-	slow := newSlowEvaluator(pr)
+	slow := newSlowEvaluator(pr, n)
 
 	if cfg.forceSlow {
-		if err := slow.supportsSize(n); err != nil {
+		if err := slow.supportsSize(); err != nil {
 			return nil, fmt.Errorf("%w: n=%d: %w", ErrUnsupportedSize, n, err)
 		}
 
 		return slow, nil
 	}
 
-	ntt := newNttEvaluator(pr)
+	ntt := newNttEvaluator(pr, n)
 
-	nttErr := ntt.supportsSize(n)
+	nttErr := ntt.supportsSize()
 	if nttErr == nil {
 		return ntt, nil
 	}
@@ -214,7 +214,7 @@ func selectEvaluator(pr *field.PolyRing, n int, cfg config) (evaluationMap, erro
 			ErrUnsupportedSize, n, pr.GetField().Modulus(), nttErr)
 	}
 
-	if err := slow.supportsSize(n); err != nil {
+	if err := slow.supportsSize(); err != nil {
 		return nil, fmt.Errorf("%w: n=%d: %w", ErrUnsupportedSize, n, err)
 	}
 
@@ -532,7 +532,7 @@ func (gao *Code) Encode(data []uint64) (Codeword, error) {
 		return nil, ErrDataTooLarge
 	}
 
-	ys, err := gao.eval.EvaluateCoeffs(data, gao.N())
+	ys, err := gao.eval.EvaluateCoeffs(data)
 	if err != nil {
 		return nil, err
 	}
