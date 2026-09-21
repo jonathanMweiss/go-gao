@@ -16,9 +16,6 @@ type ByteRange struct {
 }
 
 // A ByteCode encodes and decodes byte payloads over the code it wraps.
-//
-// It holds nothing but that code: it is safe for concurrent use, and two ByteCodes over
-// the same Code are interchangeable.
 type ByteCode struct {
 	code *Code
 }

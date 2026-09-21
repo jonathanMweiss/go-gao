@@ -128,7 +128,6 @@ strategy requires both.
 given.
 
 A [Code] is immutable after construction and safe for concurrent use by
-multiple goroutines. An [ErasureSet] is read-only once built, and a [ByteCode]
-holds nothing but the code it views, so both may be shared too.
+multiple goroutines, as are [ErasureSet] and [ByteCode].
 */
 package gao
