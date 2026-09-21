@@ -285,9 +285,85 @@ budget units per error against one per erasure. It also accepts erasures, so a c
 who does know some positions pays the lower price for them.
 
 Where an erasure code is the better fit: whole shards lost at known positions, large
-payloads, byte-oriented transport; it is also considerably faster, being built on a
-binary field with SIMD assembly and amortising one pass over many independent codewords.
-A prime field buys the error correction and pays for it in throughput.
+payloads, byte-oriented transport; it is also considerably faster.
+
+## Benchmarks
+
+Apple M2 Pro, plugged in rather than on battery, which is worth saying because on battery
+every number below drops by about 30%. `field.NTTFriendlyPrime` with NTT evaluation.
+
+`per call` is one operation on one core. The MB/s columns are aggregate payload
+throughput with that many independent codewords in flight: encode and decode are
+single-threaded, so more cores mean more operations at once, not a faster one.
+
+```
+GOMAXPROCS=1 go test -run '^$' -bench 'BenchmarkEncode$|BenchmarkErasureDecode$|BenchmarkErrorDecode$'
+GOMAXPROCS=4 go test -run '^$' -bench 'Parallel'
+```
+
+### Encoding
+
+| `n`, `k` | per call | MB/s<br>1 core | MB/s<br>2 cores | MB/s<br>4 cores |
+|---|---:|---:|---:|---:|
+| 256, 128 | 3.3 µs | 279 | 481 | 552 |
+| 1024, 512 | 14.6 µs | 260 | 446 | 547 |
+| 4096, 2048 | 60.6 µs | 245 | 437 | 619 |
+
+Encoding is one forward transform, an order of magnitude cheaper than any decode below.
+It stops scaling around four cores: a call allocates a fresh codeword and runs for only a
+few microseconds, so the allocation rate reaches the collector's limit before the cores
+run out. With `GOGC=off` the same benchmark keeps climbing.
+
+### Decoding erasures — positions known
+
+The set is built once and reused, which is how a caller with a dead node uses one.
+Building it is listed separately.
+
+| `n`, `k` | erasures | per call | MB/s<br>1 core | MB/s<br>2 cores | MB/s<br>4 cores |
+|---|---:|---:|---:|---:|---:|
+| 256, 128 | 32 | 38 µs | 23.5 | 42.8 | 75.1 |
+| | 64 | 42 µs | 21.5 | 39.4 | 70.7 |
+| | 128 *(max)* | 46 µs | 19.9 | 36.6 | 66.0 |
+| 1024, 512 | 128 | 173 µs | 20.7 | 39.3 | 74.5 |
+| | 256 | 187 µs | 19.1 | 36.5 | 69.3 |
+| | 512 *(max)* | 202 µs | 17.6 | 33.5 | 63.8 |
+| 4096, 2048 | 512 | 762 µs | 18.7 | 35.7 | 67.4 |
+| | 1024 | 828 µs | 17.2 | 33.3 | 62.6 |
+| | 2048 *(max)* | 894 µs | 15.8 | 30.6 | 57.6 |
+
+### Decoding errors — positions unknown
+
+| `n`, `k` | errors | per call | MB/s<br>1 core | MB/s<br>2 cores | MB/s<br>4 cores |
+|---|---:|---:|---:|---:|---:|
+| 256, 128 | 8 | 115 µs | 7.9 | 14.4 | 25.9 |
+| | 32 | 221 µs | 4.1 | 7.5 | 13.7 |
+| | 64 *(max)* | 263 µs | 3.5 | 6.3 | 11.2 |
+| 1024, 512 | 32 | 796 µs | 4.6 | 8.6 | 15.9 |
+| | 128 | 1.18 ms | 3.1 | 5.7 | 10.1 |
+| | 256 *(max)* | 1.59 ms | 2.3 | 4.2 | 6.8 |
+| 4096, 2048 | 128 | 3.85 ms | 3.8 | 7.1 | 12.3 |
+| | 512 | 6.14 ms | 2.4 | 4.4 | 7.1 |
+| | 1024 *(max)* | 8.28 ms | 1.8 | 3.2 | 4.7 |
+
+At the same shape and the same damage count, an error costs six to ten times an erasure.
+That gap is the search: an erasure decode divides by a locator the caller's indices
+already determine, while an error decode runs the partial GCD to find where the damage
+is. It is also why an error spends two of the `n-k` budget and an erasure one.
+
+Decoding scales further than encoding, because each call does much more work per
+allocation: erasure recovery reaches about 3.6x on four cores, error correction about
+3.3x.
+
+### Building an ErasureSet
+
+| `n`, `k` | erasures | once |
+|---|---:|---:|
+| 256, 128 | 64 | 12 µs |
+| 1024, 512 | 256 | 81 µs |
+| 4096, 2048 | 1024 | 470 µs |
+
+Roughly the cost of a few decodes, paid once per erasure pattern. A caller decoding a
+single word pays it in full; one decoding a stripe does not.
 
 ## Explanation about the decoding logic
 GAO used a strong assumption:
