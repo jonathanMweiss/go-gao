@@ -146,7 +146,7 @@ size it against 2n: evaluating needs an n-point transform, and decoding
 needs a 2n-point one for the products inside the partial GCD, so the
 strategy requires both.
 
-If you are not sure; use field.NTTFriendlyPrime, which is 57 bits wide and
+If you are not sure, use [field.NTTFriendlyPrime], which is 57 bits wide and
 can support large n,k values.
 
 # Input mutation and concurrency

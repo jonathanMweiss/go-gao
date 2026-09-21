@@ -51,10 +51,11 @@ func Example() {
 }
 
 // ExampleByteCode shows the byte view of a code: encode a payload, lose a run of wire
-// bytes, and decode what is left. Over p=65537 a symbol carries 2 payload bytes and
-// occupies 3 on the wire, so k=4 symbols take 8 bytes of payload into a 48-byte codeword.
+// bytes, and decode what is left. Over the 57-bit NTTFriendlyPrime a symbol carries 7
+// payload bytes and occupies 8 on the wire, so k=4 symbols take 28 bytes of payload into
+// a 128-byte codeword.
 func ExampleByteCode() {
-	f, err := field.NewPrimeField(65537)
+	f, err := field.NewPrimeField(field.NTTFriendlyPrime)
 	if err != nil {
 		panic(err)
 	}
@@ -75,7 +76,7 @@ func ExampleByteCode() {
 		panic(err)
 	}
 
-	// Nine wire bytes are lost, which erases the three symbols they touch.
+	// Nine wire bytes are lost, which erases the two symbols they touch.
 	lost, err := bc.Erasures(gao.ByteRange{Off: 6, Len: 9})
 	if err != nil {
 		panic(err)
@@ -95,8 +96,8 @@ func ExampleByteCode() {
 	fmt.Println("erased symbols:", lost.Len())
 	fmt.Printf("%q\n", got[:len(payload)])
 	// Output:
-	// max bytes: 8
-	// wire size: 48
-	// erased symbols: 3
+	// max bytes: 28
+	// wire size: 128
+	// erased symbols: 2
 	// "attack"
 }
