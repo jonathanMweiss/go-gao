@@ -31,9 +31,8 @@ type evaluationMap interface {
 	// Interpolate is the inverse: it returns the polynomial taking these n values at
 	// the n evaluation points.
 	//
-	// Unlike EvaluateCoeffs it takes ownership of ys, which it may modify or keep, so
-	// a caller passes a slice of its own. The decoder's is scratch it has finished
-	// with, and sparing it a copy of the whole codeword is worth the asymmetry.
+	// It mutates the input ys slice and may keep it, so a caller passes a slice of
+	// its own.
 	Interpolate(ys []uint64) (p *field.Polynomial, err error)
 
 	// The locator polynomial for the evaluation points.
@@ -115,8 +114,8 @@ func (e *slowEvaluator) EvaluateCoeffs(coeffs []uint64) ([]uint64, error) {
 	return values, nil
 }
 
-// Interpolate recovers the polynomial from its values by Lagrange interpolation. It
-// happens to leave ys alone, but callers may not rely on that.
+// Interpolate recovers the polynomial from its values by Lagrange interpolation. This
+// implementation leaves ys alone; callers may not rely on that.
 func (e *slowEvaluator) Interpolate(ys []uint64) (*field.Polynomial, error) {
 	return e.interpolator.Interpolate(e.xs, ys)
 }
