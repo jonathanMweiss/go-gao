@@ -4,6 +4,9 @@
 package gao
 
 import (
+	"fmt"
+	"slices"
+
 	"github.com/jonathanmweiss/go-gao/field"
 )
 
@@ -52,7 +55,13 @@ func (gao *Code) Erasures(at ...int) (ErasureSet, error) {
 
 	s := gao.createErasureLocator(erased, gao.xs)
 
-	sVals, err := gao.evaluateEverywhere(s)
+	// EvaluatePolynomial transforms its argument in place and takes its length as the
+	// point count, so s is padded to n and handed over as a copy: the set keeps s for
+	// the divisions in erasureOnlyMessage and recoverMessage.
+	inner := make([]uint64, gao.N())
+	copy(inner, s.NoCopySlice())
+
+	sVals, err := gao.eval.EvaluatePolynomial(gao.pr.NewPolynomial(inner, false))
 	if err != nil {
 		return ErasureSet{}, err
 	}
@@ -109,25 +118,48 @@ func (e ErasureSet) validFor(gao *Code) error {
 	return ErrForeignErasureSet
 }
 
-// evaluateEverywhere returns p evaluated at each of the code's evaluation points: one
-// forward transform on the NTT path, point by point otherwise.
-func (gao *Code) evaluateEverywhere(p *field.Polynomial) ([]uint64, error) {
-	if !gao.eval.isNTT() {
-		out := make([]uint64, gao.N())
-		for i, x := range gao.xs {
-			out[i] = gao.pr.Evaluate(p, x)
+// create the erasure locator polynomial S(x) = product of (x - xi) for xi an evaluation point corresponding to an erased index.
+// This is similar to the locator Polynomial g0=product of (x - xi) for all evaluation points, but only for the erased indices.
+// Note S(x) is distinct from the error locator E(x) of the README: E is never formed explicitly, it
+// falls out of the partial GCD as the Bezout coefficient v.
+func (gao *Code) createErasureLocator(erasedIndices []int, xs []uint64) *field.Polynomial {
+	f := gao.pr.GetField()
+	polys := make([]*field.Polynomial, len(erasedIndices))
+	for i, idx := range erasedIndices {
+		coeffs := make([]uint64, 2)
+		coeffs[1] = 1
+		coeffs[0] = f.Neg(f.Reduce(xs[idx]))
+		polys[i] = gao.pr.NewPolynomial(coeffs, false)
+	}
+
+	// complexity: O(n log^2 n)
+	return gao.pr.Product(polys)
+}
+
+// checkErasures validates caller-supplied erasure indices.
+func (gao *Code) checkErasures(erasedAt []int) ([]int, error) {
+	if len(erasedAt) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[int]struct{}, len(erasedAt))
+
+	for _, idx := range erasedAt {
+		if idx < 0 || idx >= gao.N() {
+			return nil, fmt.Errorf("%w: %d not in [0, %d)", ErrErasureOutOfRange, idx, gao.N())
 		}
 
-		return out, nil
+		if _, dup := seen[idx]; dup {
+			return nil, fmt.Errorf("%w: %d", ErrDuplicateErasure, idx)
+		}
+
+		seen[idx] = struct{}{}
 	}
 
-	inner := make([]uint64, gao.N())
-	copy(inner, p.NoCopySlice())
-
-	poly := gao.pr.NewPolynomial(inner, false)
-	if err := gao.pr.NttForward(poly); err != nil {
-		return nil, err
+	// dervied from 2e+s <= n-k where e=0 and s=len(erasedAt).
+	if len(erasedAt) > gao.N()-gao.K() {
+		return nil, ErrTooManyMissingPoints
 	}
 
-	return poly.NoCopySlice(), nil
+	return slices.Clone(erasedAt), nil
 }

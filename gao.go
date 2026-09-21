@@ -510,24 +510,6 @@ func (gao *Code) codewordMessage(g1 *field.Polynomial) (f, r *field.Polynomial) 
 	return f, r
 }
 
-// create the erasure locator polynomial S(x) = product of (x - xi) for xi an evaluation point corresponding to an erased index.
-// This is similar to the locator Polynomial g0=product of (x - xi) for all evaluation points, but only for the erased indices.
-// Note S(x) is distinct from the error locator E(x) of the README: E is never formed explicitly, it
-// falls out of the partial GCD as the Bezout coefficient v.
-func (gao *Code) createErasureLocator(erasedIndices []int, xs []uint64) *field.Polynomial {
-	f := gao.pr.GetField()
-	polys := make([]*field.Polynomial, len(erasedIndices))
-	for i, idx := range erasedIndices {
-		coeffs := make([]uint64, 2)
-		coeffs[1] = 1
-		coeffs[0] = f.Neg(f.Reduce(xs[idx]))
-		polys[i] = gao.pr.NewPolynomial(coeffs, false)
-	}
-
-	// complexity: O(n log^2 n)
-	return gao.pr.Product(polys)
-}
-
 // Encode encodes up to k data symbols into an n-symbol codeword.
 //
 // The returned values are positional: index i is the evaluation at EvaluationPoints()[i],
@@ -564,32 +546,4 @@ func (gao *Code) Encode(data []uint64) (Codeword, error) {
 	}
 
 	return ys, nil
-}
-
-// checkErasures validates caller-supplied erasure indices.
-func (gao *Code) checkErasures(erasedAt []int) ([]int, error) {
-	if len(erasedAt) == 0 {
-		return nil, nil
-	}
-
-	seen := make(map[int]struct{}, len(erasedAt))
-
-	for _, idx := range erasedAt {
-		if idx < 0 || idx >= gao.N() {
-			return nil, fmt.Errorf("%w: %d not in [0, %d)", ErrErasureOutOfRange, idx, gao.N())
-		}
-
-		if _, dup := seen[idx]; dup {
-			return nil, fmt.Errorf("%w: %d", ErrDuplicateErasure, idx)
-		}
-
-		seen[idx] = struct{}{}
-	}
-
-	// dervied from 2e+s <= n-k where e=0 and s=len(erasedAt).
-	if len(erasedAt) > gao.N()-gao.K() {
-		return nil, ErrTooManyMissingPoints
-	}
-
-	return slices.Clone(erasedAt), nil
 }
