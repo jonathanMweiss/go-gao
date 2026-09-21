@@ -71,6 +71,35 @@ A set suits any code built with the same modulus, n, k and evaluation strategy.
 Decode returns a message of exactly length k, zero-padded when the recovered
 message has high-order zero symbols.
 
+# Bytes
+
+[Code.Bytes] is a view of the same code that works in bytes rather than
+symbols. [ByteCode.Encode] packs the payload into symbols and serialises the
+codeword, and [ByteCode.Decode] takes those bytes back:
+
+	bc := code.Bytes()
+
+	raw, err := bc.Encode([]byte("attack"))
+	got, err := bc.Decode(raw, gao.ErasureSet{})
+
+A symbol carries whole bytes of payload and occupies whole bytes on the wire,
+both sized against the modulus. Over p=65537 that is 2 payload bytes in a
+3-byte symbol, so the code above takes at most 8 bytes ([ByteCode.MaxBytes],
+k times 2) and produces 48 (n times 3).
+
+Decode returns MaxBytes bytes whatever was encoded, zero-padded past the
+payload, and the padding is indistinguishable from payload afterwards: carry
+the original length and slice the result. A codeword that is not the length
+Encode produces is rejected with [ErrMismatchedLengths].
+
+Lost byte ranges are named through [ByteCode.Erasures], which builds the same
+[ErasureSet] the symbol interface takes, so a batch sharing a loss pattern
+reuses one set either way. A symbol any range touches is erased whole, and
+ranges may overlap, repeat, or fall partly outside the codeword:
+
+	lost, err := bc.Erasures(gao.ByteRange{Off: 6, Len: 9})
+	got, err := bc.Decode(raw, lost)
+
 # Evaluation strategies
 
 The evaluation points dominate the cost of both operations, and NewCode picks
@@ -99,6 +128,7 @@ strategy requires both.
 given.
 
 A [Code] is immutable after construction and safe for concurrent use by
-multiple goroutines.
+multiple goroutines. An [ErasureSet] is read-only once built, and a [ByteCode]
+holds nothing but the code it views, so both may be shared too.
 */
 package gao
