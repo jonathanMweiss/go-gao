@@ -6,16 +6,17 @@ Package gao implements Reed-Solomon error correction using Gao's decoder.
 
 Erasure coding repairs symbols only when you already know which ones are
 missing. This package also repairs symbols that are silently wrong at
-positions you do not know — the decoder finds the error locations itself. It
-operates over arbitrary prime fields up to 63 bits rather than a fixed
-GF(2^8), so the symbol alphabet is the caller's choice.
+positions you do not know: the decoder finds the error locations itself.
+
+Symbols are elements of a prime field up to 63 bits wide, chosen by the
+caller. Byte-oriented Reed-Solomon fixes that alphabet at GF(2^8).
 
 # Codes
 
-A code is a field, a codeword length n, and a message length k. Encoding
-treats the k data symbols as the coefficients of a polynomial and evaluates it
-at n points; decoding recovers those coefficients from the n possibly
-corrupted values.
+A code is built over a prime field and fixes two lengths: n symbols to a
+codeword, k of them data. Encoding treats the k data symbols as the
+coefficients of a polynomial and evaluates it at n points; decoding recovers
+those coefficients from the n possibly corrupted values.
 
 	f, err := field.NewPrimeField(65537)
 	if err != nil {
