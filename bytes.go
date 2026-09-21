@@ -28,11 +28,6 @@ func (gao *Code) Bytes() *ByteCode {
 	return &ByteCode{code: gao}
 }
 
-// Code returns the code the byte view was built from.
-func (bc *ByteCode) Code() *Code {
-	return bc.code
-}
-
 // MaxBytes is the largest payload [ByteCode.Encode] accepts.
 func (bc *ByteCode) MaxBytes() int {
 	return bc.code.K() * bc.maxPayloadPerSymbol()
