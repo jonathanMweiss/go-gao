@@ -285,9 +285,61 @@ budget units per error against one per erasure. It also accepts erasures, so a c
 who does know some positions pays the lower price for them.
 
 Where an erasure code is the better fit: whole shards lost at known positions, large
-payloads, byte-oriented transport; it is also considerably faster, being built on a
-binary field with SIMD assembly and amortising one pass over many independent codewords.
-A prime field buys the error correction and pays for it in throughput.
+payloads, byte-oriented transport; it is also considerably faster.
+
+## Benchmarks
+
+One core, `field.NTTFriendlyPrime`, NTT evaluation, throughput in payload bytes. Erasure
+decodes reuse a single `ErasureSet`, which is how a caller with a dead node uses one;
+building it is listed separately below. Reproduce with:
+
+```
+GOMAXPROCS=1 go test -run '^$' -bench 'BenchmarkErasureDecode|BenchmarkErrorDecode'
+```
+
+### Erasures — positions known
+
+| `n`, `k` | erasures | per decode | MB/s |
+|---|---:|---:|---:|
+| 256, 128 | 32 | 56 µs | 16.0 |
+| | 64 | 60 µs | 14.9 |
+| | 128 *(max)* | 66 µs | 13.5 |
+| 1024, 512 | 128 | 248 µs | 14.4 |
+| | 256 | 270 µs | 13.3 |
+| | 512 *(max)* | 294 µs | 12.2 |
+| 4096, 2048 | 512 | 1.09 ms | 13.1 |
+| | 1024 | 1.18 ms | 12.2 |
+| | 2048 *(max)* | 1.29 ms | 11.1 |
+
+### Errors — positions unknown
+
+| `n`, `k` | errors | per decode | MB/s |
+|---|---:|---:|---:|
+| 256, 128 | 8 | 165 µs | 5.4 |
+| | 32 | 318 µs | 2.8 |
+| | 64 *(max)* | 386 µs | 2.3 |
+| 1024, 512 | 32 | 1.13 ms | 3.2 |
+| | 128 | 1.70 ms | 2.1 |
+| | 256 *(max)* | 2.26 ms | 1.6 |
+| 4096, 2048 | 128 | 5.4 ms | 2.6 |
+| | 512 | 8.7 ms | 1.6 |
+| | 1024 *(max)* | 11.7 ms | 1.2 |
+
+At the same shape and the same damage count, an error costs six to ten times an erasure.
+That gap is the search: an erasure decode divides by a locator the caller's indices
+already determine, while an error decode runs the partial GCD to find where the damage
+is. It is also why an error spends two of the `n-k` budget and an erasure one.
+
+### Building an ErasureSet
+
+| `n`, `k` | erasures | once |
+|---|---:|---:|
+| 256, 128 | 64 | 17 µs |
+| 1024, 512 | 256 | 110 µs |
+| 4096, 2048 | 1024 | 662 µs |
+
+Roughly the cost of a few decodes, paid once per erasure pattern. A caller decoding a
+single word pays it in full; one decoding a stripe does not.
 
 ## Explanation about the decoding logic
 GAO used a strong assumption:
