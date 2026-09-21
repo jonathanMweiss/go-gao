@@ -54,14 +54,27 @@ go get github.com/jonathanmweiss/go-gao
 Requires Go 1.25 or later.
 
 ## Usage
-The API has two main interfaces. An engineer-friendly interface, when you only care about incoming and outgoing bytes,
-and a maths-oriented one, where symbols are used after the encoding.
+
+The library works at two levels:
+
+- **`ByteCode`**, the higher one, when you care about bytes only.
+- **`Code`**, the lower one, when you want the symbols (field elements) directly.
+
+If you are unsure, start with `ByteCode`. It is a view of a `Code`, so you build one of
+those first either way.
+
+Both fix two lengths: `n` symbols to a codeword, `k` of them data. The difference `n-k`
+is the redundancy, so a larger `n` buys budget and a larger `k` spends it on payload.
 
 ### Symbols
 
-You can encode `k` data symbols into an `n`-symbol codeword, where `k <= n`. Codewords can be decoded as long as the following holds:  
-$$ 2e+s\le n-k$$
-where $e$ is the number of errors, and $s$ is the number of erasures.
+Decoding succeeds while
+
+$$2e+s\le n-k$$
+
+where $e$ is the number of errors and $s$ the number of erasures. An erasure costs half
+what an error does, because the decoder does not have to spend budget locating it.
+`MaxErrors()` reports $(n-k)/2$, the all-errors corner of that budget.
 
 ```go
 package main
@@ -97,8 +110,17 @@ A symbol is a field element, so every value must be below the modulus.
 57 bits, so seven whole bytes fit in a symbol, and $2^{32}$ divides $p-1$, so transforms
 run to $2^{32}$ points.
 
+Codewords are positional, and reordering one makes it invalid: `Encode` returns `n`
+values where index `i` is the evaluation at `EvaluationPoints()[i]`, and `Decode` expects
+them back in that order. Store or split them as you like, one symbol per disk, per peer
+or per packet, and reassemble them in the same order before decoding. A codeword of any
+other length is rejected with `ErrMismatchedLengths`, since no amount of correction fixes
+framing.
 
 ### Declaring erasures
+
+An erasure is a position you know is unusable: a missing symbol, or a range of bytes
+missing from a `ByteCode` codeword.
 
 ```go
 codeword, _ := code.Encode(data)
@@ -153,17 +175,16 @@ lost, err := code.Erasures(erased...)
 decoded, err := code.Decode(ys, lost)
 ```
 
-
 ### Bytes
-This is the more engineer friendly interface. `code.Bytes()` is a view of the same code
-that works in bytes: `Encode` returns the codeword already packed, ready to send or
-store, and `Decode` takes those bytes back.
+
+`code.Bytes()` is a view of the same code that works in bytes: `Encode` returns the
+codeword already packed, ready to send or store, and `Decode` takes those bytes back.
 
 ```go
 code, _ := gao.NewCode(f, 16, 4)
 bc := code.Bytes()
 
-bc.MaxBytes() // 28: k symbols carrying 7 payload bytes each
+bc.MaxBytes() // 28
 
 raw, err := bc.Encode([]byte("attack at dawn"))
 // len(raw) == 128
@@ -172,9 +193,14 @@ got, err := bc.Decode(raw, gao.ErasureSet{})
 // got[:14] == "attack at dawn"
 ```
 
-`Decode` returns `MaxBytes()` bytes, zero-padded past whatever was encoded. The
-padding is indistinguishable from payload afterwards, so keep the original length and
-slice the result.
+A symbol carries whole bytes of payload and occupies whole bytes on the wire, both sized
+against the modulus. Over the 57-bit `NTTFriendlyPrime` that is 7 payload bytes in an
+8-byte symbol, so this code takes at most 28 bytes (`k` times 7) and produces 128 (`n`
+times 8).
+
+`Decode` returns `MaxBytes()` bytes, zero-padded past whatever was encoded. The padding
+is indistinguishable from payload afterwards, so keep the original length and slice the
+result.
 
 Byte ranges known to be lost (a dropped packet, a bad sector) are named as erasures,
 which cost half as much of the budget as an undeclared corruption. A symbol any range
@@ -190,7 +216,10 @@ above.
 
 ### Too many errors
 
-Past the budget `Decode` usually returns `ErrDecoding`. It cannot always tell: with enough errors a received word lands closer to a *different* valid codeword, and the decoder returns that message. This is a property of Reed-Solomon codes, not of this implementation.
+Past the budget `Decode` usually returns `ErrDecoding`, but it cannot always tell: with
+enough errors a received word lands closer to a *different* valid codeword, and the
+decoder returns a confidently wrong message. That is inherent to Reed-Solomon codes, not
+to this implementation.
 
 ### Choosing parameters
 
@@ -233,15 +262,14 @@ Invalid parameters are reported at construction: `NewCode` returns `ErrUnsupport
 
 ### Notes
 
-- A `*Code` is immutable after construction and safe for concurrent use.
-- An `ErasureSet` is read-only once built and safe for concurrent use.
+- A `*Code` is immutable after construction and safe for concurrent use, as are an
+  `ErasureSet` and a `ByteCode`.
 - `Decode` never modifies its input.
 - `Decode` returns a message of exactly length `k`, zero-padded when the recovered
   message has high-order zero symbols. `[]uint64{10, 20, 30, 0}` decodes back to four
   symbols, not three.
-- Codewords are positional throughout. `EvaluationPoints()` is available for
-  interoperating with another implementation, but neither `Encode` nor `Decode`
-  requires it.
+- `EvaluationPoints()` is available for interoperating with another implementation,
+  but neither `Encode` nor `Decode` requires it.
 
 See [`example_test.go`](./example_test.go) and the unit tests for further examples.
 
@@ -336,7 +364,6 @@ Contributions are welcome! If you’d like to contribute, please open an issue o
 - Chen, Jinyuan. "Optimal Error-Free Multi-Valued Byzantine Agreement", DISC 2021 —
   the COOL protocol, which uses Reed-Solomon error correction to bound the communication
   cost of agreement.  (for a more digestable read: https://decentralizedthoughts.github.io/2025-08-01-graded-dispersal/)
-
 
 ## Author
 Jonathan Weiss ([@jonathanmweiss](https://github.com/jonathanmweiss))
