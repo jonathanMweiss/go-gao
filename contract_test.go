@@ -51,7 +51,7 @@ func TestNewCodeRejectsBadSizes(t *testing.T) {
 }
 
 // mustErasures builds the erasure set for at, failing the test if the indices are
-// malformed. Tests that mean to exercise that rejection call Erasures directly.
+// malformed. Tests that exercise that rejection call Erasures directly.
 func mustErasures(t testing.TB, code *Code, at ...int) ErasureSet {
 	t.Helper()
 

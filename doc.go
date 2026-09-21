@@ -58,16 +58,15 @@ declares those positions unusable, whatever ys happens to hold at them, so
 there is no need to blank them first. Pass the zero [ErasureSet] when nothing
 is missing.
 
-Building the set is the expensive half of an erasure decode and does not depend
-on the received word, so words that lost the same positions share one:
+Building the set is the expensive half of an erasure decode and depends on the
+positions alone. Words that lost the same positions share one:
 
 	lost, err := code.Erasures(3, 7)
 	for _, word := range words {
 		msg, err := code.Decode(word, lost)
 	}
 
-A set suits any code built with the same modulus, n, k and evaluation strategy,
-not only the one that built it.
+A set suits any code built with the same modulus, n, k and evaluation strategy.
 
 Decode returns a message of exactly length k, zero-padded when the recovered
 message has high-order zero symbols.

@@ -13,9 +13,8 @@ import (
 	"github.com/jonathanmweiss/go-gao/field"
 )
 
-// TestErasureSetReusedMatchesFreshOne is the correctness argument for sharing a set: a
-// set built once and used for many words must give exactly what a set built per word
-// would have given.
+// TestErasureSetReusedMatchesFreshOne: a set built once and used for many words gives
+// what a set built per word gives.
 func TestErasureSetReusedMatchesFreshOne(t *testing.T) {
 	const n, k = 64, 16
 
@@ -51,9 +50,9 @@ func TestErasureSetReusedMatchesFreshOne(t *testing.T) {
 	}
 }
 
-// TestErasureSetCrossesEquivalentCodes: the set describes the code's parameters, not the
-// particular Code value, so the sender and receiver of a codeword can each build their
-// own code and still share a set.
+// TestErasureSetCrossesEquivalentCodes: a set describes the code's parameters, not the
+// particular Code value, so sender and receiver can each build their own code and still
+// share a set.
 func TestErasureSetCrossesEquivalentCodes(t *testing.T) {
 	const n, k = 32, 8
 
@@ -86,9 +85,8 @@ func TestErasureSetCrossesEquivalentCodes(t *testing.T) {
 	require.Equal(t, msg, got)
 }
 
-// TestErasureSetRejectsForeignCode pins what the parameters have to cover. The strategy
-// matters as much as the numbers: the two evaluators place their points differently, so
-// a set built for one is meaningless to the other even when n, k and the modulus agree.
+// TestErasureSetRejectsForeignCode pins what the parameters cover. The two evaluators
+// place their points differently, so the strategy counts alongside n, k and the modulus.
 func TestErasureSetRejectsForeignCode(t *testing.T) {
 	const n, k = 16, 4
 
@@ -119,9 +117,8 @@ func TestErasureSetRejectsForeignCode(t *testing.T) {
 	}
 }
 
-// TestPointwiseAndNTTSetsDiffer is the reason the strategy is part of the identity: the
-// same indices over the same field produce different locator evaluations under the two
-// evaluators.
+// TestPointwiseAndNTTSetsDiffer: the same indices over the same field give different
+// locator evaluations under the two evaluators.
 func TestPointwiseAndNTTSetsDiffer(t *testing.T) {
 	const n, k = 16, 4
 
@@ -134,8 +131,8 @@ func TestPointwiseAndNTTSetsDiffer(t *testing.T) {
 	assert.NotEqual(t, mustErasures(t, ntt, 1, 2).sVals, mustErasures(t, slow, 1, 2).sVals)
 }
 
-// TestZeroErasureSetDecodesAnywhere: the zero value declares nothing, so it carries no
-// parameters to clash with.
+// TestZeroErasureSetDecodesAnywhere: the zero value carries no parameters to clash
+// with.
 func TestZeroErasureSetDecodesAnywhere(t *testing.T) {
 	const k = 8
 
@@ -159,7 +156,7 @@ func TestZeroErasureSetDecodesAnywhere(t *testing.T) {
 	}
 }
 
-// TestErasureSetLen reports the erasures declared, so a caller can check its own budget.
+// TestErasureSetLen: Len counts the erasures declared.
 func TestErasureSetLen(t *testing.T) {
 	code, err := NewCode(newfield(t, field.NTTFriendlyPrime), 32, 8, RequireNTT())
 	require.NoError(t, err)
@@ -172,8 +169,8 @@ func TestErasureSetLen(t *testing.T) {
 	assert.Equal(t, 2, mustByteErasures(t, bc, ByteRange{Off: 0, Len: bc.encodedSymbolSize() + 1}).Len())
 }
 
-// TestErasureSetIsConcurrencySafe drives one shared set through many goroutines, which is
-// the case the sharing exists for. Run under -race.
+// TestErasureSetIsConcurrencySafe drives one shared set through many goroutines. Run
+// under -race.
 func TestErasureSetIsConcurrencySafe(t *testing.T) {
 	const n, k = 64, 16
 

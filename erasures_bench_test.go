@@ -11,9 +11,9 @@ import (
 	"github.com/jonathanmweiss/go-gao/field"
 )
 
-// BenchmarkErasureSetReuse contrasts the two ways to decode a batch of words that all
-// lost the same positions: one set built for the batch against one set per word. The
-// gap is the work Erasures hoists out of the per-word path.
+// BenchmarkErasureSetReuse decodes a batch of words that all lost the same positions,
+// once with a set built for the batch and once with a set per word. The gap is the work
+// Erasures hoists out of the per-word path.
 func BenchmarkErasureSetReuse(b *testing.B) {
 	const batch = 64
 
@@ -69,8 +69,7 @@ func BenchmarkErasureSetReuse(b *testing.B) {
 	}
 }
 
-// damagedWords encodes count random messages and overwrites the erased positions, so
-// every word needs the erasures to decode.
+// damagedWords encodes count random messages and overwrites the erased positions.
 func damagedWords(b *testing.B, code *Code, erased []int, count int) []Codeword {
 	b.Helper()
 

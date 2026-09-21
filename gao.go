@@ -99,8 +99,7 @@ var (
 	ErrMismatchedLengths    = errors.New("codeword length does not match the code's n")
 	ErrErasureOutOfRange    = errors.New("erasure index out of range")
 	ErrDuplicateErasure     = errors.New("duplicate erasure index")
-	// ErrForeignErasureSet means the set was built by a different Code, whose evaluation
-	// points the locator inside it does not match.
+	// ErrForeignErasureSet means the set was built for a code with other parameters.
 	ErrForeignErasureSet = errors.New("erasure set belongs to a different code")
 	// ErrDecoding means no message is consistent with the points given, so the error
 	// and erasure budget was exceeded.
@@ -226,8 +225,8 @@ func selectEvaluator(pr *field.PolyRing, n int, cfg config) (evaluationMap, erro
 // corrupted values and missing ones.
 //
 // ys holds one value per evaluation point, in the order EvaluationPoints returns them.
-// erasures names the positions known to be unusable, and [Code.Erasures] builds it;
-// whatever ys holds at an erased index is ignored, so there is no need to blank those
+// erasures names the positions known to be unusable, and [Code.Erasures] builds it.
+// Whatever ys holds at an erased index is ignored, so there is no need to blank those
 // entries first. Pass the zero ErasureSet when nothing is missing.
 //
 // An erasure is cheaper than an error precisely because its position is known: decoding
@@ -242,8 +241,8 @@ func selectEvaluator(pr *field.PolyRing, n int, cfg config) (evaluationMap, erro
 // message it recovers has high-order zero symbols.
 //
 // It returns ErrMismatchedLengths if ys is not n long, ErrForeignErasureSet if erasures
-// came from another code, and ErrDecoding if no message is consistent with what it was
-// given.
+// was built for other parameters, and ErrDecoding if no message is consistent with what
+// it was given.
 func (gao *Code) Decode(ys Codeword, erasures ErasureSet) ([]uint64, error) {
 	if len(ys) != gao.N() {
 		return nil, ErrMismatchedLengths

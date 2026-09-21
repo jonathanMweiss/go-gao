@@ -113,9 +113,8 @@ decoded, err := code.Decode(codeword, lost)
 Whatever the slice holds at a declared index is ignored, so there is no need to blank
 those entries first. Pass the zero `ErasureSet` when nothing is missing.
 
-`Erasures` does the work the positions imply — building the locator and evaluating it —
-which is the expensive half of an erasure decode and does not depend on the received
-word. Words that lost the same positions share one set:
+`Erasures` builds the locator and evaluates it: the expensive half of an erasure decode,
+and it depends on the positions alone. Words that lost the same positions share one set:
 
 ```go
 lost, err := code.Erasures(3, 17, 42)
@@ -125,10 +124,9 @@ for _, word := range words {
 }
 ```
 
-That is the usual shape when a node or a disk goes down: every codeword striped across
-it loses the same index. Sharing the set is worth about **1.3x** on a batch — decoding
-64 words at `n=8192, k=4096` takes 100.8 ms with one set against 128.6 ms with one per
-word.
+That is the shape of a node or a disk going down: every codeword striped across it loses
+the same index. Sharing the set is worth about **1.3x** on a batch — decoding 64 words at
+`n=8192, k=4096` takes 100.8 ms with one set against 128.6 ms with one per word.
 
 A set suits any code built with the same modulus, `n`, `k` and strategy, so the two ends
 of a link can each build their own code and still share one.
@@ -187,8 +185,8 @@ lost, err := bc.Erasures(gao.ByteRange{Off: 24, Len: 16})
 got, err := bc.Decode(raw, lost)
 ```
 
-The set is the same type either way, so a batch sharing a loss pattern reuses it exactly
-as the symbol interface does.
+The set is the same type either way, so a batch sharing a loss pattern reuses it as
+above.
 
 ### Too many errors
 
@@ -236,8 +234,7 @@ Invalid parameters are reported at construction: `NewCode` returns `ErrUnsupport
 ### Notes
 
 - A `*Code` is immutable after construction and safe for concurrent use.
-- An `ErasureSet` is read-only once built, so one set may be shared across goroutines
-  as well as across codewords.
+- An `ErasureSet` is read-only once built and safe for concurrent use.
 - `Decode` never modifies its input.
 - `Decode` returns a message of exactly length `k`, zero-padded when the recovered
   message has high-order zero symbols. `[]uint64{10, 20, 30, 0}` decodes back to four
