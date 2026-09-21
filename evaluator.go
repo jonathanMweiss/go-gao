@@ -24,9 +24,10 @@ type evaluationMap interface {
 	// The returned slice is owned by the caller and safe to modify.
 	EvaluationPoints(n int) (xs []uint64)
 
-	// EvaluatePolynomial returns p evaluated at the n evaluation points, zero-padding
-	// p where it is shorter. It leaves p untouched, so a caller may keep it.
-	EvaluatePolynomial(p *field.Polynomial, n int) (ys []uint64, err error)
+	// EvaluateCoeffs returns the polynomial with these coefficients evaluated at the n
+	// evaluation points, zero-padding where coeffs is shorter. coeffs holds at most n
+	// values, and is read, never written, so a caller may keep it.
+	EvaluateCoeffs(coeffs []uint64, n int) (ys []uint64, err error)
 
 	// The locator polynomial for the evaluation points.
 	// Namely, given the evaluation points x_1, ..., x_n, the locator polynomial is
@@ -120,18 +121,14 @@ func (e *slowEvaluator) cachedPoints(n int) []uint64 {
 	})
 }
 
-var errNotInCoefficientForm = errors.New("polynomial not in coefficient form")
-
 func (e *slowEvaluator) PrimeField() field.Field {
 	return e.pr.GetField()
 }
 
-// EvaluatePolynomial evaluates p pointwise, which reads p without modifying it. A p
-// shorter than n needs no padding here: the missing coefficients are zero either way.
-func (e *slowEvaluator) EvaluatePolynomial(p *field.Polynomial, n int) ([]uint64, error) {
-	if !p.IsCoeffMode() {
-		return nil, errNotInCoefficientForm
-	}
+// EvaluateCoeffs evaluates pointwise. NewPolynomial reduces its slice in place, so the
+// coefficients are copied rather than wrapped.
+func (e *slowEvaluator) EvaluateCoeffs(coeffs []uint64, n int) ([]uint64, error) {
+	p := e.pr.NewPolynomial(slices.Clone(coeffs), false)
 
 	values := make([]uint64, n)
 

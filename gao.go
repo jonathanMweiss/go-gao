@@ -532,11 +532,7 @@ func (gao *Code) Encode(data []uint64) (Codeword, error) {
 		return nil, ErrDataTooLarge
 	}
 
-	// NewPolynomial reduces its slice in place and keeps it, so the caller's data is
-	// cloned rather than handed over. EvaluatePolynomial pads to n from here.
-	p := gao.pr.NewPolynomial(slices.Clone(data), false)
-
-	ys, err := gao.eval.EvaluatePolynomial(p, gao.N())
+	ys, err := gao.eval.EvaluateCoeffs(data, gao.N())
 	if err != nil {
 		return nil, err
 	}

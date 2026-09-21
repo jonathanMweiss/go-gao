@@ -91,12 +91,12 @@ func (e *nttEvaluator) PrimeField() field.Field {
 	return e.pr.GetField()
 }
 
-// EvaluatePolynomial transforms a copy of p: NttForward works in place and its length
-// sets the transform's, so the copy both pads p to n and leaves the caller's polynomial
-// intact.
-func (e *nttEvaluator) EvaluatePolynomial(p *field.Polynomial, n int) ([]uint64, error) {
+// EvaluateCoeffs transforms a buffer of its own: NttForward works in place and its
+// length sets the transform's, so the one buffer both pads coeffs to n and keeps the
+// caller's slice intact.
+func (e *nttEvaluator) EvaluateCoeffs(coeffs []uint64, n int) ([]uint64, error) {
 	inner := make([]uint64, n)
-	copy(inner, p.NoCopySlice())
+	copy(inner, coeffs)
 
 	work := e.pr.NewPolynomial(inner, false)
 	if err := e.pr.NttForward(work); err != nil {
