@@ -18,8 +18,8 @@ import (
 // corruptSymbol flips the low byte of symbol i in an encoded codeword. The value moves
 // by at most 255, which is far below the modulus, so the symbol is always a different
 // field element after reduction -- never an accidental no-op.
-func corruptSymbol(code *Code, raw []byte, i int) {
-	raw[i*code.encodedSymbolSize()] ^= 0xFF
+func corruptSymbol(bc *ByteCode, raw []byte, i int) {
+	raw[i*bc.encodedSymbolSize()] ^= 0xFF
 }
 
 // TestSymbolWidthsStayInTheField checks both. maxPayloadPerSymbol must be the widest
@@ -30,7 +30,9 @@ func TestSymbolWidthsStayInTheField(t *testing.T) {
 		code, err := NewCode(newfield(t, prime), 16, 4)
 		require.NoError(t, err)
 
-		pay, wire := code.maxPayloadPerSymbol(), code.encodedSymbolSize()
+		bc := code.Bytes()
+
+		pay, wire := bc.maxPayloadPerSymbol(), bc.encodedSymbolSize()
 		require.Positive(t, pay, "p=%d", prime)
 		require.Greater(t, wire, pay, "p=%d: the wire needs a byte the payload does not", prime)
 
@@ -53,22 +55,24 @@ func TestEncodeBytesRoundTrip(t *testing.T) {
 		code, err := NewCode(newfield(t, prime), 32, 8)
 		require.NoError(t, err)
 
+		bc := code.Bytes()
+
 		rng := rand.New(rand.NewSource(int64(prime)))
 
-		for length := 0; length <= code.MaxBytes(); length++ {
+		for length := 0; length <= bc.MaxBytes(); length++ {
 			data := make([]byte, length)
 			rng.Read(data)
 
-			raw, err := code.EncodeBytes(data)
+			raw, err := bc.Encode(data)
 			require.NoError(t, err, "p=%d len=%d", prime, length)
-			require.Len(t, raw, code.N()*code.encodedSymbolSize(), "p=%d len=%d", prime, length)
+			require.Len(t, raw, code.N()*bc.encodedSymbolSize(), "p=%d len=%d", prime, length)
 
-			got, err := code.DecodeBytes(raw)
+			got, err := bc.Decode(raw, ErasureSet{})
 			require.NoError(t, err, "p=%d len=%d", prime, length)
 
-			require.Len(t, got, code.MaxBytes(), "p=%d len=%d", prime, length)
+			require.Len(t, got, bc.MaxBytes(), "p=%d len=%d", prime, length)
 			require.True(t, bytes.Equal(data, got[:length]), "p=%d len=%d: payload differs", prime, length)
-			require.True(t, bytes.Equal(make([]byte, code.MaxBytes()-length), got[length:]),
+			require.True(t, bytes.Equal(make([]byte, bc.MaxBytes()-length), got[length:]),
 				"p=%d len=%d: padding must be zero", prime, length)
 		}
 	}
@@ -82,19 +86,21 @@ func TestEncodeBytesCorrectsErrors(t *testing.T) {
 	code, err := NewCode(newfield(t, field.NTTFriendlyPrime), n, k, RequireNTT())
 	require.NoError(t, err)
 
+	bc := code.Bytes()
+
 	rng := rand.New(rand.NewSource(11))
 
-	data := make([]byte, code.MaxBytes())
+	data := make([]byte, bc.MaxBytes())
 	rng.Read(data)
 
-	raw, err := code.EncodeBytes(data)
+	raw, err := bc.Encode(data)
 	require.NoError(t, err)
 
 	for _, i := range rng.Perm(n)[:code.MaxErrors()] {
-		corruptSymbol(code, raw, i)
+		corruptSymbol(bc, raw, i)
 	}
 
-	got, err := code.DecodeBytes(raw)
+	got, err := bc.Decode(raw, ErasureSet{})
 	require.NoError(t, err)
 	require.True(t, bytes.Equal(data, got))
 }
@@ -107,12 +113,14 @@ func TestDecodeBytesWithLostRanges(t *testing.T) {
 	code, err := NewCode(newfield(t, field.NTTFriendlyPrime), n, k, RequireNTT())
 	require.NoError(t, err)
 
+	bc := code.Bytes()
+
 	rng := rand.New(rand.NewSource(8))
 
-	data := make([]byte, code.MaxBytes())
+	data := make([]byte, bc.MaxBytes())
 	rng.Read(data)
 
-	raw, err := code.EncodeBytes(data)
+	raw, err := bc.Encode(data)
 	require.NoError(t, err)
 
 	lost := ByteRange{Off: 77, Len: 130}
@@ -120,7 +128,7 @@ func TestDecodeBytesWithLostRanges(t *testing.T) {
 		raw[i] = 0xAA
 	}
 
-	got, err := code.DecodeBytes(raw, lost)
+	got, err := bc.Decode(raw, mustByteErasures(t, bc, lost))
 	require.NoError(t, err)
 	require.True(t, bytes.Equal(data, got))
 }
@@ -131,23 +139,27 @@ func TestDecodeBytesToleratesRedundantRanges(t *testing.T) {
 	code, err := NewCode(newfield(t, field.NTTFriendlyPrime), 64, 16, RequireNTT())
 	require.NoError(t, err)
 
+	bc := code.Bytes()
+
 	rng := rand.New(rand.NewSource(12))
 
-	data := make([]byte, code.MaxBytes())
+	data := make([]byte, bc.MaxBytes())
 	rng.Read(data)
 
-	raw, err := code.EncodeBytes(data)
+	raw, err := bc.Encode(data)
 	require.NoError(t, err)
 
 	for i := 80; i < 160; i++ {
 		raw[i] = 0xAA
 	}
 
-	got, err := code.DecodeBytes(raw,
+	overlapping := mustByteErasures(t, bc,
 		ByteRange{Off: 80, Len: 80},
 		ByteRange{Off: 80, Len: 80}, // the same loss again
 		ByteRange{Off: 96, Len: 16}, // and a piece of it
 	)
+
+	got, err := bc.Decode(raw, overlapping)
 	require.NoError(t, err)
 	require.True(t, bytes.Equal(data, got))
 }
@@ -158,7 +170,9 @@ func TestErasedSymbols(t *testing.T) {
 	code, err := NewCode(newfield(t, field.NTTFriendlyPrime), 16, 4)
 	require.NoError(t, err)
 
-	require.Equal(t, 8, code.encodedSymbolSize())
+	bc := code.Bytes()
+
+	require.Equal(t, 8, bc.encodedSymbolSize())
 
 	for _, tc := range []struct {
 		name string
@@ -179,7 +193,7 @@ func TestErasedSymbols(t *testing.T) {
 		{"unordered input comes back sorted", []ByteRange{{24, 8}, {0, 8}}, []int{0, 3}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, code.erasedSymbols(tc.lost))
+			assert.Equal(t, tc.want, bc.erasedSymbols(tc.lost))
 		})
 	}
 }
@@ -190,21 +204,23 @@ func TestDecodeBytesReducesRatherThanRejects(t *testing.T) {
 	code, err := NewCode(newfield(t, field.NTTFriendlyPrime), 64, 16, RequireNTT())
 	require.NoError(t, err)
 
+	bc := code.Bytes()
+
 	rng := rand.New(rand.NewSource(3))
 
-	data := make([]byte, code.MaxBytes())
+	data := make([]byte, bc.MaxBytes())
 	rng.Read(data)
 
-	raw, err := code.EncodeBytes(data)
+	raw, err := bc.Encode(data)
 	require.NoError(t, err)
 
 	// Smash each symbol's high wire byte, pushing it above the modulus.
-	w := code.encodedSymbolSize()
+	w := bc.encodedSymbolSize()
 	for _, i := range rng.Perm(code.N())[:code.MaxErrors()] {
 		raw[i*w+w-1] = 0xFF
 	}
 
-	got, err := code.DecodeBytes(raw)
+	got, err := bc.Decode(raw, ErasureSet{})
 	require.NoError(t, err, "out-of-range symbols must not be rejected")
 	require.True(t, bytes.Equal(data, got))
 }
@@ -215,12 +231,14 @@ func TestEncodeBytesRejectsOversizedData(t *testing.T) {
 	code, err := NewCode(newfield(t, field.NTTFriendlyPrime), 16, 4)
 	require.NoError(t, err)
 
-	require.Equal(t, 28, code.MaxBytes(), "4 symbols * 7 bytes")
+	bc := code.Bytes()
 
-	_, err = code.EncodeBytes(make([]byte, code.MaxBytes()))
+	require.Equal(t, 28, bc.MaxBytes(), "4 symbols * 7 bytes")
+
+	_, err = bc.Encode(make([]byte, bc.MaxBytes()))
 	assert.NoError(t, err)
 
-	_, err = code.EncodeBytes(make([]byte, code.MaxBytes()+1))
+	_, err = bc.Encode(make([]byte, bc.MaxBytes()+1))
 	assert.ErrorIs(t, err, ErrDataTooLarge)
 }
 
@@ -230,10 +248,12 @@ func TestDecodeBytesRejectsBadLength(t *testing.T) {
 	code, err := NewCode(newfield(t, field.NTTFriendlyPrime), 16, 4)
 	require.NoError(t, err)
 
-	_, err = code.DecodeBytes(make([]byte, 3))
+	bc := code.Bytes()
+
+	_, err = bc.Decode(make([]byte, 3), ErasureSet{})
 	assert.ErrorIs(t, err, ErrMismatchedLengths)
 
-	_, err = code.DecodeBytes(make([]byte, code.N()*code.maxPayloadPerSymbol()))
+	_, err = bc.Decode(make([]byte, code.N()*bc.maxPayloadPerSymbol()), ErasureSet{})
 	assert.ErrorIs(t, err, ErrMismatchedLengths)
 }
 
@@ -269,12 +289,14 @@ func FuzzEncodeBytesRoundTrip(fz *testing.F) {
 		fz.Fatal(err)
 	}
 
+	bc := code.Bytes()
+
 	fz.Fuzz(func(t *testing.T, data []byte, rawE, rawS uint16) {
-		if len(data) > code.MaxBytes() {
-			data = data[:code.MaxBytes()]
+		if len(data) > bc.MaxBytes() {
+			data = data[:bc.MaxBytes()]
 		}
 
-		raw, err := code.EncodeBytes(data)
+		raw, err := bc.Encode(data)
 		require.NoError(t, err)
 
 		// Split the budget: 2e + s <= n-k, counted in symbols.
@@ -286,10 +308,10 @@ func FuzzEncodeBytesRoundTrip(fz *testing.F) {
 
 		perm := rng.Perm(n)
 		for _, i := range perm[:e] {
-			corruptSymbol(code, raw, i)
+			corruptSymbol(bc, raw, i)
 		}
 
-		w := code.encodedSymbolSize()
+		w := bc.encodedSymbolSize()
 
 		lost := make([]ByteRange, 0, s)
 		for _, i := range perm[e : e+s] {
@@ -300,10 +322,10 @@ func FuzzEncodeBytesRoundTrip(fz *testing.F) {
 			lost = append(lost, ByteRange{Off: i * w, Len: w})
 		}
 
-		got, err := code.DecodeBytes(raw, lost...)
+		got, err := bc.Decode(raw, mustByteErasures(t, bc, lost...))
 		require.NoError(t, err, "len=%d e=%d s=%d", len(data), e, s)
 
-		require.Len(t, got, code.MaxBytes())
+		require.Len(t, got, bc.MaxBytes())
 		require.True(t, bytes.Equal(data, got[:len(data)]), "len=%d e=%d s=%d: payload differs", len(data), e, s)
 	})
 }
@@ -315,8 +337,10 @@ func TestEncodedSizeIsOneMoreThanPayload(t *testing.T) {
 		code, err := NewCode(newfield(t, prime), 16, 4)
 		require.NoError(t, err)
 
-		require.Equal(t, (bits.Len64(prime)+7)/8, code.encodedSymbolSize(),
+		bc := code.Bytes()
+
+		require.Equal(t, (bits.Len64(prime)+7)/8, bc.encodedSymbolSize(),
 			"p=%d: must match the direct ceil(bitlen/8)", prime)
-		require.Equal(t, code.maxPayloadPerSymbol()+1, code.encodedSymbolSize(), "p=%d", prime)
+		require.Equal(t, bc.maxPayloadPerSymbol()+1, bc.encodedSymbolSize(), "p=%d", prime)
 	}
 }

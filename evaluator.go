@@ -5,6 +5,7 @@ package gao
 
 import (
 	"errors"
+	"slices"
 
 	"github.com/jonathanmweiss/go-gao/field"
 )
@@ -18,21 +19,26 @@ import (
 type evaluationMap interface {
 	// has access to a specific prime field.
 	PrimeField() field.Field
-	// returns the evaluation points for a polynomial of degree n.
-	// The returned slice is owned by the caller and safe to modify.
-	EvaluationPoints(n int) (xs []uint64)
+	// returns the n evaluation points, where n is the codeword length this map was
+	// built for. The returned slice is owned by the caller and safe to modify.
+	EvaluationPoints() (xs []uint64)
 
-	// might change the polynomial
-	EvaluatePolynomial(p *field.Polynomial) (ys []uint64, err error)
+	// EvaluateCoeffs returns the polynomial with these coefficients evaluated at the n
+	// evaluation points, zero-padding where coeffs is shorter. coeffs holds at most n
+	// values, and is read, never written, so a caller may keep it.
+	EvaluateCoeffs(coeffs []uint64) (ys []uint64, err error)
+
+	// Interpolate is the inverse: it returns the polynomial taking these n values at
+	// the n evaluation points.
+	//
+	// It mutates the input ys slice and may keep it, so a caller passes a slice of
+	// its own.
+	Interpolate(ys []uint64) (p *field.Polynomial, err error)
 
 	// The locator polynomial for the evaluation points.
 	// Namely, given the evaluation points x_1, ..., x_n, the locator polynomial is
 	// L(x) = (x - x_1)(x - x_2)...(x - x_n)
-	GenerateLocatorPolynomial(n int) *field.Polynomial
-
-	// supportsSize reports whether this map can produce n evaluation points over its
-	// field, so callers can fail with an error instead of panicking later.
-	supportsSize(n int) error
+	GenerateLocatorPolynomial() *field.Polynomial
 
 	isNTT() bool
 }
@@ -50,55 +56,75 @@ var errNonPositiveN = errors.New("codeword length `n` must be positive")
 //
 // The ring is the Code's own, shared rather than duplicated; see nttEvaluator.
 //
-// A slowEvaluator adds no mutable state of its own, and the ring it borrows is safe for
-// concurrent use, so an evaluator is too.
+// An evaluator is built complete and never written to afterwards, and the ring it
+// borrows is safe for concurrent use, so an evaluator is too.
 type slowEvaluator struct {
-	pr *field.PolyRing
+	pr           *field.PolyRing
+	interpolator *field.Interpolator
+	n            int
+	xs           []uint64 // the evaluation points, read-only after construction.
 }
 
-func newSlowEvaluator(pr *field.PolyRing) *slowEvaluator {
-	return &slowEvaluator{pr: pr}
+// newSlowEvaluator builds the evaluator for codeword length n, or reports why the field
+// cannot serve that many points. The points are 1, 2, ..., n.
+func newSlowEvaluator(pr *field.PolyRing, n int) (*slowEvaluator, error) {
+	if n <= 0 {
+		return nil, errNonPositiveN
+	}
+
+	if uint64(n) >= pr.GetField().Modulus() {
+		return nil, errNTooLargeForField
+	}
+
+	xs := make([]uint64, n)
+	for i := range xs {
+		xs[i] = uint64(i + 1)
+	}
+
+	return &slowEvaluator{
+		pr:           pr,
+		interpolator: field.NewInterpolator(pr),
+		n:            n,
+		xs:           xs,
+	}, nil
 }
 
 // EvaluationPoints returns the points 1, 2, ..., n used to evaluate a codeword.
-// Each call builds a fresh slice.
-func (e *slowEvaluator) EvaluationPoints(n int) []uint64 {
-	points := make([]uint64, n)
-	for i := range points {
-		points[i] = uint64(i + 1)
-	}
-
-	return points
+// Each call returns a fresh slice, cloned from the evaluator's own.
+func (e *slowEvaluator) EvaluationPoints() []uint64 {
+	return slices.Clone(e.xs)
 }
-
-var errNotInCoefficientForm = errors.New("polynomial not in coefficient form")
 
 func (e *slowEvaluator) PrimeField() field.Field {
 	return e.pr.GetField()
 }
 
-func (e *slowEvaluator) EvaluatePolynomial(p *field.Polynomial) ([]uint64, error) {
-	if !p.IsCoeffMode() {
-		return nil, errNotInCoefficientForm
-	}
+// EvaluateCoeffs evaluates pointwise. NewPolynomial reduces its slice in place, so the
+// coefficients are copied rather than wrapped.
+func (e *slowEvaluator) EvaluateCoeffs(coeffs []uint64) ([]uint64, error) {
+	p := e.pr.NewPolynomial(slices.Clone(coeffs), false)
 
-	points := e.EvaluationPoints(len(p.ToSlice()))
-	values := make([]uint64, len(points))
+	values := make([]uint64, e.n)
 
 	pr := e.pr
-	for i, x := range points {
+	for i, x := range e.xs {
 		values[i] = pr.Evaluate(p, x)
 	}
 
 	return values, nil
 }
 
-func (e *slowEvaluator) GenerateLocatorPolynomial(n int) *field.Polynomial {
-	xs := e.EvaluationPoints(n)
-	polys := make([]*field.Polynomial, n)
+// Interpolate recovers the polynomial from its values by Lagrange interpolation. This
+// implementation leaves ys alone; callers may not rely on that.
+func (e *slowEvaluator) Interpolate(ys []uint64) (*field.Polynomial, error) {
+	return e.interpolator.Interpolate(e.xs, ys)
+}
+
+func (e *slowEvaluator) GenerateLocatorPolynomial() *field.Polynomial {
+	polys := make([]*field.Polynomial, e.n)
 
 	f := e.pr.GetField()
-	for i, x := range xs {
+	for i, x := range e.xs {
 		// create m_i(x) = (x - x_i)
 		coeffs := make([]uint64, 2)
 		coeffs[1] = 1
@@ -108,20 +134,6 @@ func (e *slowEvaluator) GenerateLocatorPolynomial(n int) *field.Polynomial {
 	}
 
 	return e.pr.Product(polys)
-}
-
-// supportsSize accepts any positive n: the points are simply 1..n, which requires
-// nothing of the field beyond having at least n distinct non-zero elements.
-func (e *slowEvaluator) supportsSize(n int) error {
-	if n <= 0 {
-		return errNonPositiveN
-	}
-
-	if uint64(n) >= e.pr.GetField().Modulus() {
-		return errNTooLargeForField
-	}
-
-	return nil
 }
 
 var errNTooLargeForField = errors.New("n must be smaller than the field modulus")

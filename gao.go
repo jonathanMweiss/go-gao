@@ -27,8 +27,7 @@ type Code struct {
 	k         int
 	maxErrors int
 
-	pr           *field.PolyRing
-	interpolator *field.Interpolator
+	pr *field.PolyRing
 	// g0 polynomial from the Gao code.
 	// with fast EvaluationMaps like NTT, this polynomial can be used to do fast division.
 	g0 *field.Polynomial
@@ -99,6 +98,8 @@ var (
 	ErrMismatchedLengths    = errors.New("codeword length does not match the code's n")
 	ErrErasureOutOfRange    = errors.New("erasure index out of range")
 	ErrDuplicateErasure     = errors.New("duplicate erasure index")
+	// ErrForeignErasureSet means the set was built for a code with other parameters.
+	ErrForeignErasureSet = errors.New("erasure set belongs to a different code")
 	// ErrDecoding means no message is consistent with the points given, so the error
 	// and erasure budget was exceeded.
 	ErrDecoding = errors.New("decoding error")
@@ -179,40 +180,30 @@ func NewCode(f field.Field, n, k int, opts ...Option) (*Code, error) {
 		maxErrors: (n - k) / 2,
 		pr:        pr,
 		// g0(x) = (x - x_1)(x - x_2)...(x - x_n)
-		g0:           eval.GenerateLocatorPolynomial(n),
-		xs:           eval.EvaluationPoints(n),
-		interpolator: field.NewInterpolator(pr),
-		stopDegree:   (n + k) / 2,
+		g0:         eval.GenerateLocatorPolynomial(),
+		xs:         eval.EvaluationPoints(),
+		stopDegree: (n + k) / 2,
 	}, nil
 }
 
 // selectEvaluator resolves the strategy, preferring the NTT unless told otherwise.
 func selectEvaluator(pr *field.PolyRing, n int, cfg config) (evaluationMap, error) {
-	slow := newSlowEvaluator(pr)
-
-	if cfg.forceSlow {
-		if err := slow.supportsSize(n); err != nil {
-			return nil, fmt.Errorf("%w: n=%d: %w", ErrUnsupportedSize, n, err)
+	if !cfg.forceSlow {
+		ntt, nttErr := newNttEvaluator(pr, n)
+		if nttErr == nil {
+			return ntt, nil
 		}
 
-		return slow, nil
+		if cfg.requireNTT {
+			return nil, fmt.Errorf(
+				"%w: n=%d: RequireNTT was set but this field admits no NTT usable at that length "+
+					"(n and 2n must both be powers of two dividing p-1, p=%d): %w",
+				ErrUnsupportedSize, n, pr.GetField().Modulus(), nttErr)
+		}
 	}
 
-	ntt := newNttEvaluator(pr)
-
-	nttErr := ntt.supportsSize(n)
-	if nttErr == nil {
-		return ntt, nil
-	}
-
-	if cfg.requireNTT {
-		return nil, fmt.Errorf(
-			"%w: n=%d: RequireNTT was set but this field admits no NTT usable at that length "+
-				"(n and 2n must both be powers of two dividing p-1, p=%d): %w",
-			ErrUnsupportedSize, n, pr.GetField().Modulus(), nttErr)
-	}
-
-	if err := slow.supportsSize(n); err != nil {
+	slow, err := newSlowEvaluator(pr, n)
+	if err != nil {
 		return nil, fmt.Errorf("%w: n=%d: %w", ErrUnsupportedSize, n, err)
 	}
 
@@ -223,8 +214,9 @@ func selectEvaluator(pr *field.PolyRing, n int, cfg config) (evaluationMap, erro
 // corrupted values and missing ones.
 //
 // ys holds one value per evaluation point, in the order EvaluationPoints returns them.
-// erasedAt lists the indices of positions known to be unusable; whatever ys holds at an
-// erased index is ignored, so there is no need to blank those entries first.
+// erasures names the positions known to be unusable, and [Code.Erasures] builds it.
+// Whatever ys holds at an erased index is ignored, so there is no need to blank those
+// entries first. Pass the zero ErasureSet when nothing is missing.
 //
 // An erasure is cheaper than an error precisely because its position is known: decoding
 // succeeds while 2*errors+erasures <= n-k.
@@ -237,17 +229,15 @@ func selectEvaluator(pr *field.PolyRing, n int, cfg config) (evaluationMap, erro
 // ys is not modified, and the returned message always has length k, zero-padded if the
 // message it recovers has high-order zero symbols.
 //
-// It returns ErrMismatchedLengths if ys is not n long, ErrErasureOutOfRange or
-// ErrDuplicateErasure for a malformed erasedAt, ErrTooManyMissingPoints if more than n-k
-// positions are erased, and ErrDecoding if no message is consistent with what it was
-// given.
-func (gao *Code) Decode(ys Codeword, erasedAt ...int) ([]uint64, error) {
+// It returns ErrMismatchedLengths if ys is not n long, ErrForeignErasureSet if erasures
+// was built for other parameters, and ErrDecoding if no message is consistent with what
+// it was given.
+func (gao *Code) Decode(ys Codeword, erasures ErasureSet) ([]uint64, error) {
 	if len(ys) != gao.N() {
 		return nil, ErrMismatchedLengths
 	}
 
-	erased, err := gao.checkErasures(erasedAt)
-	if err != nil {
+	if err := erasures.validFor(gao); err != nil {
 		return nil, err
 	}
 
@@ -257,17 +247,11 @@ func (gao *Code) Decode(ys Codeword, erasedAt ...int) ([]uint64, error) {
 
 	// The all-zero message is degenerate for Gao's algorithm and has to be settled here,
 	// before the partial GCD ever sees it. See zeroCodewordIsNearest.
-	if gao.zeroCodewordIsNearest(work, erased) {
+	if gao.zeroCodewordIsNearest(work, erasures.at) {
 		return make([]uint64, gao.K()), nil
 	}
 
-	var f, r *field.Polynomial
-	if gao.eval.isNTT() {
-		f, r, err = gao.decodeNTT(work, gao.xs, erased)
-	} else {
-		f, r, err = gao.decodeGeneric(work, gao.xs, erased)
-	}
-
+	f, r, err := gao.decode(work, erasures)
 	if err != nil {
 		return nil, err
 	}
@@ -331,24 +315,22 @@ func (gao *Code) reduceSlice(ys []uint64) {
 }
 
 // full intuitive explanation in README.md
-func (gao *Code) decodeGeneric(ys []uint64, xs []uint64, erased []int) (*field.Polynomial, *field.Polynomial, error) {
-	var S *field.Polynomial
-
+func (gao *Code) decode(ys []uint64, erasures ErasureSet) (*field.Polynomial, *field.Polynomial, error) {
 	stopDegree := gao.stopDegree
-	fld := gao.pr.GetField()
 
-	if len(erased) > 0 {
-		S = gao.createErasureLocator(erased, xs)
-		// scale ys by S(xi). interpolating the scaled values yields g1*S mod g0 (see README.md for reason).
-		for i, x := range xs {
-			valS := gao.pr.Evaluate(S, x)
-			ys[i] = fld.Mul(ys[i], valS)
+	if !erasures.empty() {
+		// scale ys by S(xi): interpolating the scaled values yields g1*S mod g0 (see
+		// README.md for reason).
+		fld := gao.pr.GetField()
+		for i := range ys {
+			ys[i] = fld.Mul(ys[i], erasures.sVals[i])
 		}
-		// each erasure raises the stop degree by half of what an error does.
-		stopDegree = (gao.N() + gao.K() + len(erased)) / 2
+
+		stopDegree = erasures.stopDegree
 	}
 
-	g1, err := gao.interpolator.Interpolate(xs, ys)
+	// ys is the decoder's own scratch, so Interpolate is free to keep it.
+	g1, err := gao.eval.Interpolate(ys)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -359,64 +341,16 @@ func (gao *Code) decodeGeneric(ys []uint64, xs []uint64, erased []int) (*field.P
 	// thus, GCD returns g=g1, v=1 with r=0.
 	// Since the return value `f` is defined f=g1/v (and in this case v=1), we return g1 directly.
 	// This is true only when there are no erasures.
-	if len(erased) == 0 && g1.Degree() < gao.K() {
+	if erasures.empty() && g1.Degree() < gao.K() {
 		f, r := gao.codewordMessage(g1)
 		return f, r, nil
 	}
 
-	if f, r, ok := gao.erasureOnlyMessage(g1, S); ok {
+	if f, r, ok := gao.erasureOnlyMessage(g1, erasures); ok {
 		return f, r, nil
 	}
 
-	return gao.recoverMessage(g1, S, stopDegree)
-}
-
-func (gao *Code) decodeNTT(ys, xs []uint64, erased []int) (*field.Polynomial, *field.Polynomial, error) {
-	var S *field.Polynomial
-	stopDegree := gao.stopDegree
-	fld := gao.pr.GetField()
-
-	if len(erased) > 0 {
-		S = gao.createErasureLocator(erased, xs)
-
-		// Evaluate S(x) at all points xs
-		sInner := make([]uint64, gao.N())
-		copy(sInner, S.NoCopySlice())
-		Spoly := gao.pr.NewPolynomial(sInner, false)
-		if err := gao.pr.NttForward(Spoly); err != nil {
-			return nil, nil, err
-		}
-		sVals := Spoly.NoCopySlice()
-
-		// (see README.md for reason)
-		// scale ys by S(xi): the inverse NTT below then yields (g1*S mod g0).
-		for i := range ys {
-			ys[i] = fld.Mul(ys[i], sVals[i])
-		}
-		stopDegree = (gao.N() + gao.K() + len(erased)) / 2
-	}
-
-	g1 := gao.pr.NewPolynomial(ys, true)
-	if err := gao.pr.NttBackward(g1); err != nil {
-		return nil, nil, err
-	}
-
-	// Optimistic error-free path:
-	// When g_1 has degree < K, it'll be the first polynomial in the Euclidean
-	// remainder sequence below stopDegree, so PartialGCD would
-	// thus, GCD returns g=g1, v=1 with r=0.
-	// Since the return value `f` is defined f=g1/v (and in this case v=1), we return g1 directly.
-	// This is true only when there are no erasures.
-	if len(erased) == 0 && g1.Degree() < gao.K() {
-		f, r := gao.codewordMessage(g1)
-		return f, r, nil
-	}
-
-	if f, r, ok := gao.erasureOnlyMessage(g1, S); ok {
-		return f, r, nil
-	}
-
-	return gao.recoverMessage(g1, S, stopDegree)
+	return gao.recoverMessage(g1, erasures, stopDegree)
 }
 
 // erasureOnlyMessage recovers the message directly from g1 and S, skipping the partial
@@ -457,16 +391,16 @@ func (gao *Code) decodeNTT(ys, xs []uint64, erased []int) (*field.Polynomial, *f
 // The contrapositive is the guard itself: a word carrying t >= 1 errors has
 // deg(g1) >= K+s, fails the test, and goes on to the partial GCD. Nothing error-free is
 // turned away either, since deg(f*S) <= K-1+s < n means the mod g0 never bites.
-func (gao *Code) erasureOnlyMessage(g1, S *field.Polynomial) (f, r *field.Polynomial, ok bool) {
-	if S == nil {
+func (gao *Code) erasureOnlyMessage(g1 *field.Polynomial, erasures ErasureSet) (f, r *field.Polynomial, ok bool) {
+	if erasures.empty() {
 		return nil, nil, false
 	}
 
-	if g1.Degree() >= gao.K()+S.Degree() {
+	if g1.Degree() >= gao.K()+erasures.s.Degree() {
 		return nil, nil, false
 	}
 
-	f, r = gao.pr.Div(g1, S)
+	f, r = gao.pr.Div(g1, erasures.s)
 	// Scaling by S zeroed the erased positions, so g1 vanishes there and S always divides it.
 	// should never happen, but check anyway.
 	if !r.IsZero() {
@@ -477,7 +411,7 @@ func (gao *Code) erasureOnlyMessage(g1, S *field.Polynomial) (f, r *field.Polyno
 }
 
 // recoverMessage runs the partial GCD and strips the locators from what it returns.
-func (gao *Code) recoverMessage(g1, S *field.Polynomial, stopDegree int) (f, rem *field.Polynomial, err error) {
+func (gao *Code) recoverMessage(g1 *field.Polynomial, erasures ErasureSet, stopDegree int) (f, rem *field.Polynomial, err error) {
 	pr := gao.pr
 
 	g, _, v := pr.PartialGCD(gao.g0, g1, stopDegree)
@@ -489,7 +423,7 @@ func (gao *Code) recoverMessage(g1, S *field.Polynomial, stopDegree int) (f, rem
 
 	G, remG := pr.Div(g, v)
 
-	if S == nil {
+	if erasures.empty() {
 		return G, remG, nil
 	}
 
@@ -497,7 +431,7 @@ func (gao *Code) recoverMessage(g1, S *field.Polynomial, stopDegree int) (f, rem
 		return nil, nil, ErrDecoding
 	}
 
-	f, rem = pr.Div(G, S)
+	f, rem = pr.Div(G, erasures.s)
 
 	return f, rem, nil
 }
@@ -518,24 +452,6 @@ func (gao *Code) codewordMessage(g1 *field.Polynomial) (f, r *field.Polynomial) 
 	r = gao.pr.NewPolynomial(nil, false)
 
 	return f, r
-}
-
-// create the erasure locator polynomial S(x) = product of (x - xi) for xi an evaluation point corresponding to an erased index.
-// This is similar to the locator Polynomial g0=product of (x - xi) for all evaluation points, but only for the erased indices.
-// Note S(x) is distinct from the error locator E(x) of the README: E is never formed explicitly, it
-// falls out of the partial GCD as the Bezout coefficient v.
-func (gao *Code) createErasureLocator(erasedIndices []int, xs []uint64) *field.Polynomial {
-	f := gao.pr.GetField()
-	polys := make([]*field.Polynomial, len(erasedIndices))
-	for i, idx := range erasedIndices {
-		coeffs := make([]uint64, 2)
-		coeffs[1] = 1
-		coeffs[0] = f.Neg(f.Reduce(xs[idx]))
-		polys[i] = gao.pr.NewPolynomial(coeffs, false)
-	}
-
-	// complexity: O(n log^2 n)
-	return gao.pr.Product(polys)
 }
 
 // Encode encodes up to k data symbols into an n-symbol codeword.
@@ -560,46 +476,10 @@ func (gao *Code) Encode(data []uint64) (Codeword, error) {
 		return nil, ErrDataTooLarge
 	}
 
-	// pad:
-	paddedData := make([]uint64, gao.N())
-	copy(paddedData, data)
-
-	// create polynomial from data.
-	p := gao.pr.NewPolynomial(paddedData, false)
-	// evaluate polynomial at n points.
-
-	ys, err := gao.eval.EvaluatePolynomial(p)
+	ys, err := gao.eval.EvaluateCoeffs(data)
 	if err != nil {
 		return nil, err
 	}
 
 	return ys, nil
-}
-
-// checkErasures validates caller-supplied erasure indices.
-func (gao *Code) checkErasures(erasedAt []int) ([]int, error) {
-	if len(erasedAt) == 0 {
-		return nil, nil
-	}
-
-	seen := make(map[int]struct{}, len(erasedAt))
-
-	for _, idx := range erasedAt {
-		if idx < 0 || idx >= gao.N() {
-			return nil, fmt.Errorf("%w: %d not in [0, %d)", ErrErasureOutOfRange, idx, gao.N())
-		}
-
-		if _, dup := seen[idx]; dup {
-			return nil, fmt.Errorf("%w: %d", ErrDuplicateErasure, idx)
-		}
-
-		seen[idx] = struct{}{}
-	}
-
-	// dervied from 2e+s <= n-k where e=0 and s=len(erasedAt).
-	if len(erasedAt) > gao.N()-gao.K() {
-		return nil, ErrTooManyMissingPoints
-	}
-
-	return slices.Clone(erasedAt), nil
 }

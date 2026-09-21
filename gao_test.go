@@ -93,7 +93,7 @@ func TestNoCorruptions(t *testing.T) {
 		a.NoError(err)
 
 		// no corruptions
-		decoded, err := gao.Decode(encoded)
+		decoded, err := gao.Decode(encoded, ErasureSet{})
 		a.NoError(err)
 
 		a.Equal(makeTestSlice(tc.k), decoded)
@@ -120,7 +120,7 @@ func TestErasures(t *testing.T) {
 		// add erasures. We should be able to handle up to n-k erasures.
 		erased := damageCodeword(f, testRNG(t), encoded, 0, gao.N()-gao.K())
 
-		decoded, err := gao.Decode(encoded, erased...)
+		decoded, err := gao.Decode(encoded, mustErasures(t, gao, erased...))
 		a.NoError(err)
 
 		a.Equal(makeTestSlice(tc.k), decoded)
@@ -152,7 +152,7 @@ func TestMixedErasuresAndCorruptions(t *testing.T) {
 
 		erased := damageCodeword(f, testRNG(t), encoded, numCorruptions, numErasures)
 
-		decoded, err := gao.Decode(encoded, erased...)
+		decoded, err := gao.Decode(encoded, mustErasures(t, gao, erased...))
 		a.NoError(err)
 		a.Equal(originalData, decoded)
 	}
@@ -182,7 +182,7 @@ func TestCorruptions(t *testing.T) {
 		a.Len(corrupted, gao.N())
 		a.NotEqual(encoded, corrupted)
 
-		decoded, err := gao.Decode(corrupted)
+		decoded, err := gao.Decode(corrupted, ErasureSet{})
 		a.NoError(err)
 
 		a.Equal(makeTestSlice(tc.k), decoded)
@@ -213,7 +213,7 @@ func TestSliceEncodeDecode(t *testing.T) {
 		encodedCopy := make([]uint64, len(encodedSlice))
 		copy(encodedCopy, encodedSlice)
 
-		decodedSlice, err := gao.Decode(encodedCopy)
+		decodedSlice, err := gao.Decode(encodedCopy, ErasureSet{})
 		a.NoError(err)
 		a.Equal(originalData, decodedSlice)
 
@@ -222,7 +222,7 @@ func TestSliceEncodeDecode(t *testing.T) {
 		copy(corruptedSlice, encodedSlice)
 		corruptCodeword(f, rng, corruptedSlice, gao.MaxErrors())
 
-		decodedFromCorrupted, err := gao.Decode(corruptedSlice)
+		decodedFromCorrupted, err := gao.Decode(corruptedSlice, ErasureSet{})
 		a.NoError(err)
 		a.Equal(originalData, decodedFromCorrupted)
 	}
@@ -262,7 +262,7 @@ func TestOptimisticErrorFreePath(t *testing.T) {
 
 			corruptCodeword(f, rng, work, e)
 
-			decoded, err := gao.Decode(work)
+			decoded, err := gao.Decode(work, ErasureSet{})
 			a.NoError(err, "n=%d errors=%d", tc.n, e)
 			a.Equal(msg, decoded, "n=%d errors=%d", tc.n, e)
 		}
@@ -280,7 +280,7 @@ func TestOptimisticErrorFreePath(t *testing.T) {
 			summed[i] = f.Add(enc1[i], enc2[i])
 		}
 
-		decoded, err := gao.Decode(summed)
+		decoded, err := gao.Decode(summed, ErasureSet{})
 		a.NoError(err, "beyond-tolerance n=%d", tc.n)
 
 		want := make([]uint64, tc.k)
@@ -347,7 +347,7 @@ func BenchmarkDecode(b *testing.B) {
 					// Decode does not modify its input, so one codeword serves every
 					// iteration.
 					for i := 0; i < b.N; i++ {
-						if _, err := gao.Decode(encoding); err != nil {
+						if _, err := gao.Decode(encoding, ErasureSet{}); err != nil {
 							b.Fatal(err)
 						}
 					}
@@ -394,7 +394,7 @@ func BenchmarkDecodeParallel(b *testing.B) {
 
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
-					if _, err := code.Decode(encoded); err != nil {
+					if _, err := code.Decode(encoded, ErasureSet{}); err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -447,7 +447,7 @@ func BenchmarkDecodeOnePercentCorruptionsNTT(b *testing.B) {
 			// Decode does not modify its input, so the codeword is reused as is rather
 			// than re-copied inside the timed loop.
 			for i := 0; i < b.N; i++ {
-				if _, err := gao.Decode(corrupted); err != nil {
+				if _, err := gao.Decode(corrupted, ErasureSet{}); err != nil {
 					b.Fatal(err)
 				}
 			}

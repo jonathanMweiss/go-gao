@@ -46,7 +46,7 @@ func TestLargeCodeWithFastGCD(t *testing.T) {
 	// Fixed seed: this test exists to reproduce one specific failure.
 	corruptCodeword(f, rand.New(rand.NewSource(1337)), corrupted, corruptions)
 
-	decoded, err := gao.Decode(corrupted)
+	decoded, err := gao.Decode(corrupted, ErasureSet{})
 	if err != nil {
 		t.Fatalf("fast decoding failed on %d corruptions out of %d, within the budget of %d: %v",
 			corruptions, n, gao.MaxErrors(), err)

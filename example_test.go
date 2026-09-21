@@ -38,7 +38,7 @@ func Example() {
 		codeword[i] = 12345
 	}
 
-	decoded, err := code.Decode(codeword)
+	decoded, err := code.Decode(codeword, gao.ErasureSet{})
 	if err != nil {
 		panic(err)
 	}
@@ -48,4 +48,56 @@ func Example() {
 	// Output:
 	// [10 20 30 40]
 	// max repairable errors: 6
+}
+
+// ExampleByteCode shows the byte view of a code: encode a payload, lose a run of wire
+// bytes, and decode what is left. Over the 57-bit NTTFriendlyPrime a symbol carries 7
+// payload bytes and occupies 8 on the wire, so k=4 symbols take 28 bytes of payload into
+// a 128-byte codeword.
+func ExampleByteCode() {
+	f, err := field.NewPrimeField(field.NTTFriendlyPrime)
+	if err != nil {
+		panic(err)
+	}
+
+	const n, k = 16, 4
+
+	code, err := gao.NewCode(f, n, k, gao.RequireNTT())
+	if err != nil {
+		panic(err)
+	}
+
+	bc := code.Bytes()
+
+	payload := []byte("attack")
+
+	raw, err := bc.Encode(payload)
+	if err != nil {
+		panic(err)
+	}
+
+	// Nine wire bytes are lost, which erases the two symbols they touch.
+	lost, err := bc.Erasures(gao.ByteRange{Off: 6, Len: 9})
+	if err != nil {
+		panic(err)
+	}
+
+	for i := 6; i < 15; i++ {
+		raw[i] = 0xFF
+	}
+
+	got, err := bc.Decode(raw, lost)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println("max bytes:", bc.MaxBytes())
+	fmt.Println("wire size:", len(raw))
+	fmt.Println("erased symbols:", lost.Len())
+	fmt.Printf("%q\n", got[:len(payload)])
+	// Output:
+	// max bytes: 28
+	// wire size: 128
+	// erased symbols: 2
+	// "attack"
 }

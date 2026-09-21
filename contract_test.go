@@ -50,6 +50,27 @@ func TestNewCodeRejectsBadSizes(t *testing.T) {
 	}
 }
 
+// mustErasures builds the erasure set for at, failing the test if the indices are
+// malformed. Tests that exercise that rejection call Erasures directly.
+func mustErasures(t testing.TB, code *Code, at ...int) ErasureSet {
+	t.Helper()
+
+	es, err := code.Erasures(at...)
+	require.NoError(t, err)
+
+	return es
+}
+
+// mustByteErasures is mustErasures for the byte view.
+func mustByteErasures(t testing.TB, bc *ByteCode, lost ...ByteRange) ErasureSet {
+	t.Helper()
+
+	es, err := bc.Erasures(lost...)
+	require.NoError(t, err)
+
+	return es
+}
+
 func newfield(t testing.TB, prime uint64) *field.PrimeField {
 	t.Helper()
 
@@ -141,7 +162,7 @@ func TestDecodeDoesNotMutateInput(t *testing.T) {
 
 			before := slices.Clone(codeword)
 
-			decoded, err := code.Decode(codeword, erased...)
+			decoded, err := code.Decode(codeword, mustErasures(t, code, erased...))
 			require.NoError(t, err)
 			assert.Equal(t, data, decoded)
 
@@ -154,7 +175,7 @@ func TestDecodeDoesNotMutateInput(t *testing.T) {
 
 			before := slices.Clone(codeword)
 
-			decoded, err := code.Decode(codeword)
+			decoded, err := code.Decode(codeword, ErasureSet{})
 			require.NoError(t, err)
 			assert.Equal(t, data, decoded)
 
@@ -171,10 +192,10 @@ func TestDecodeRejectsWrongLength(t *testing.T) {
 	code, err := NewCode(f, 16, 4, RequireNTT())
 	require.NoError(t, err)
 
-	_, err = code.Decode(make([]uint64, 15))
+	_, err = code.Decode(make([]uint64, 15), ErasureSet{})
 	assert.ErrorIs(t, err, ErrMismatchedLengths)
 
-	_, err = code.Decode(make([]uint64, 17))
+	_, err = code.Decode(make([]uint64, 17), ErasureSet{})
 	assert.ErrorIs(t, err, ErrMismatchedLengths)
 }
 
@@ -207,14 +228,14 @@ func TestDecodeErasures(t *testing.T) {
 		}
 
 		// Declared as erasures: 12 <= n-k, so it decodes.
-		decoded, err := code.Decode(damaged, erased...)
+		decoded, err := code.Decode(damaged, mustErasures(t, code, erased...))
 		require.NoError(t, err)
 		assert.Equal(t, data, decoded)
 
 		// Undeclared, the same slice is 12 errors against a budget of 6 — past the
 		// distance bound, so the decoder either reports failure or lands on a
 		// different codeword. What it must not do is return the original message.
-		got, err := code.Decode(damaged)
+		got, err := code.Decode(damaged, ErasureSet{})
 		if err == nil {
 			assert.NotEqual(t, data, got,
 				"12 undeclared errors are beyond the correction radius")
@@ -230,10 +251,10 @@ func TestDecodeErasures(t *testing.T) {
 			garbage[i] = 65536
 		}
 
-		fromZero, err := code.Decode(zeroed, erased...)
+		fromZero, err := code.Decode(zeroed, mustErasures(t, code, erased...))
 		require.NoError(t, err)
 
-		fromGarbage, err := code.Decode(garbage, erased...)
+		fromGarbage, err := code.Decode(garbage, mustErasures(t, code, erased...))
 		require.NoError(t, err)
 
 		assert.Equal(t, data, fromZero)
@@ -253,7 +274,7 @@ func TestDecodeErasures(t *testing.T) {
 			damaged[i] = 222 // undeclared: genuine errors
 		}
 
-		decoded, err := code.Decode(damaged, erased...)
+		decoded, err := code.Decode(damaged, mustErasures(t, code, erased...))
 		require.NoError(t, err)
 		assert.Equal(t, data, decoded)
 	})
@@ -269,10 +290,10 @@ func TestDecodeErasures(t *testing.T) {
 			garbage[i] = 7777
 		}
 
-		fromZeroed, err := code.Decode(zeroed, erased...)
+		fromZeroed, err := code.Decode(zeroed, mustErasures(t, code, erased...))
 		require.NoError(t, err)
 
-		fromGarbage, err := code.Decode(garbage, erased...)
+		fromGarbage, err := code.Decode(garbage, mustErasures(t, code, erased...))
 		require.NoError(t, err)
 
 		assert.Equal(t, fromZeroed, fromGarbage)
@@ -283,15 +304,13 @@ func TestDecodeErasures(t *testing.T) {
 // TestDecodeRejectsBadErasures: these indices come straight from the caller,
 // unlike the map form where absent keys are well-formed by construction. A duplicate
 // would give the erasure locator a repeated root and corrupt the decode silently.
-func TestDecodeRejectsBadErasures(t *testing.T) {
+func TestErasuresRejectsBadIndices(t *testing.T) {
 	f := newfield(t, field.NTTFriendlyPrime)
 
 	const n, k = 16, 4
 
 	code, err := NewCode(f, n, k, RequireNTT())
 	require.NoError(t, err)
-
-	ys := make([]uint64, n)
 
 	for _, tc := range []struct {
 		name   string
@@ -311,7 +330,7 @@ func TestDecodeRejectsBadErasures(t *testing.T) {
 		{"too many, but all duplicates", make([]int, n-k+1), ErrDuplicateErasure},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := code.Decode(ys, tc.erased...)
+			_, err := code.Erasures(tc.erased...)
 			assert.ErrorIs(t, err, tc.want)
 		})
 	}
@@ -354,7 +373,7 @@ func TestEvaluationPointsReturnsCopy(t *testing.T) {
 			data := makeTestSlice(code.K())
 			enc, err := code.Encode(data)
 			require.NoError(t, err)
-			dec, err := code.Decode(enc)
+			dec, err := code.Decode(enc, ErasureSet{})
 			require.NoError(t, err)
 			assert.Equal(t, data, dec)
 		})
@@ -388,7 +407,7 @@ func TestDecodeIsConcurrencySafe(t *testing.T) {
 	for range goroutines {
 		go func() {
 			for range 20 {
-				decoded, err := code.Decode(corrupted)
+				decoded, err := code.Decode(corrupted, ErasureSet{})
 				if err != nil {
 					errs <- err
 
@@ -437,7 +456,7 @@ func TestDecodesAtFullErrorBudget(t *testing.T) {
 
 			corruptCodeword(f, rng, codeword, code.MaxErrors())
 
-			decoded, err := code.Decode(codeword)
+			decoded, err := code.Decode(codeword, ErasureSet{})
 			require.NoError(t, err, "must correct exactly MaxErrors=%d corruptions", code.MaxErrors())
 			require.Equal(t, data, decoded)
 		})
@@ -452,7 +471,7 @@ func TestDecodesAtFullErrorBudget(t *testing.T) {
 
 			erasedAt := damageCodeword(f, rng, codeword, errs, erasures)
 
-			decoded, err := code.Decode(codeword, erasedAt...)
+			decoded, err := code.Decode(codeword, mustErasures(t, code, erasedAt...))
 			require.NoError(t, err, "must handle %d errors + %d erasures", errs, erasures)
 			require.Equal(t, data, decoded)
 		})

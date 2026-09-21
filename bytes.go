@@ -15,61 +15,70 @@ type ByteRange struct {
 	Off, Len int
 }
 
-// MaxBytes is the largest payload [Code.EncodeBytes] accepts.
-func (gao *Code) MaxBytes() int {
-	return gao.K() * gao.maxPayloadPerSymbol()
+// A ByteCode encodes and decodes byte payloads over the code it wraps.
+type ByteCode struct {
+	code *Code
 }
 
-// EncodeBytes encodes data and returns the codeword as bytes, ready to send or store.
+// Bytes returns a view of the code that speaks bytes instead of symbols.
+func (gao *Code) Bytes() *ByteCode {
+	return &ByteCode{code: gao}
+}
+
+// MaxBytes is the largest payload [ByteCode.Encode] accepts.
+func (bc *ByteCode) MaxBytes() int {
+	return bc.code.K() * bc.maxPayloadPerSymbol()
+}
+
+// Encode encodes data and returns the codeword as bytes, ready to send or store.
 //
 // Short data is zero-padded, and the padding is indistinguishable from payload
-// afterwards, so the caller has to carry the original length: [Code.DecodeBytes] returns
+// afterwards, so the caller has to carry the original length: [ByteCode.Decode] returns
 // MaxBytes bytes whatever was encoded.
 //
 // It returns ErrDataTooLarge if data exceeds MaxBytes.
-func (gao *Code) EncodeBytes(data []byte) ([]byte, error) {
-	if len(data) > gao.MaxBytes() {
-		return nil, fmt.Errorf("%w: %d bytes exceeds %d", ErrDataTooLarge, len(data), gao.MaxBytes())
+func (bc *ByteCode) Encode(data []byte) ([]byte, error) {
+	if len(data) > bc.MaxBytes() {
+		return nil, fmt.Errorf("%w: %d bytes exceeds %d", ErrDataTooLarge, len(data), bc.MaxBytes())
 	}
 
-	word, err := gao.Encode(bytes2symbols(data, gao.maxPayloadPerSymbol(), gao.K()))
+	word, err := bc.code.Encode(bytes2symbols(data, bc.maxPayloadPerSymbol(), bc.code.K()))
 	if err != nil {
 		return nil, err
 	}
 
-	return gao.marshal(word), nil
+	return bc.marshal(word), nil
 }
 
-// DecodeBytes decodes a codeword produced by [Code.EncodeBytes], repairing it, and
-// returns MaxBytes payload bytes.
+// Decode decodes a codeword produced by [ByteCode.Encode], repairing it, and returns
+// MaxBytes payload bytes.
 //
-// `lost` states byte ranges that aren't known (erasures).
-// A symbol any range touches is erased whole.
-// ranges may overlap, repeat, or fall partly outside the codeword.
+// erasures names the byte ranges that aren't known, and [ByteCode.Erasures] builds it.
+// Pass the zero ErasureSet when nothing is missing.
 //
-// It returns ErrMismatchedLengths if raw is not the length EncodeBytes produces.
-func (gao *Code) DecodeBytes(raw []byte, lost ...ByteRange) ([]byte, error) {
-	word, err := gao.unmarshal(raw)
+// It returns ErrMismatchedLengths if raw is not the length Encode produces.
+func (bc *ByteCode) Decode(raw []byte, erasures ErasureSet) ([]byte, error) {
+	word, err := bc.unmarshal(raw)
 	if err != nil {
 		return nil, err
 	}
 
-	msg, err := gao.Decode(word, gao.erasedSymbols(lost)...)
+	msg, err := bc.code.Decode(word, erasures)
 	if err != nil {
 		return nil, err
 	}
 
-	return symbols2bytes(msg, gao.maxPayloadPerSymbol()), nil
+	return symbols2bytes(msg, bc.maxPayloadPerSymbol()), nil
 }
 
 // maxPayloadPerSymbol is the most payload one symbol can carry
-func (gao *Code) maxPayloadPerSymbol() int {
-	return (bits.Len64(gao.PrimeField().Modulus()) - 1) / 8
+func (bc *ByteCode) maxPayloadPerSymbol() int {
+	return (bits.Len64(bc.code.PrimeField().Modulus()) - 1) / 8
 }
 
 // encodedSymbolSize is the space one symbol occupies once encoded, which is the smallest number of bytes that can hold the modulus.
-func (gao *Code) encodedSymbolSize() int {
-	return (bits.Len64(gao.PrimeField().Modulus()) + 7) / 8
+func (bc *ByteCode) encodedSymbolSize() int {
+	return (bits.Len64(bc.code.PrimeField().Modulus()) + 7) / 8
 }
 
 // bytes2symbols splits data into k symbols of payloadBytes bytes each, little-endian. The
@@ -108,8 +117,8 @@ func symbols2bytes(msg []uint64, payloadBytes int) []byte {
 }
 
 // marshal serialises a codeword little-endian at encodedSymbolSize bytes per symbol.
-func (gao *Code) marshal(c Codeword) []byte {
-	w := gao.encodedSymbolSize()
+func (bc *ByteCode) marshal(c Codeword) []byte {
+	w := bc.encodedSymbolSize()
 	out := make([]byte, len(c)*w)
 
 	for i, sym := range c {
@@ -128,16 +137,16 @@ func (gao *Code) marshal(c Codeword) []byte {
 // are corrupted (not marked as erasures).
 // A wrong length is rejected, since no amount of correction
 // fixes framing.
-func (gao *Code) unmarshal(b []byte) (Codeword, error) {
-	w := gao.encodedSymbolSize()
+func (bc *ByteCode) unmarshal(b []byte) (Codeword, error) {
+	w := bc.encodedSymbolSize()
 
-	want := gao.N() * w
+	want := bc.code.N() * w
 	if len(b) != want {
 		return nil, fmt.Errorf("%w: got %d bytes, want %d", ErrMismatchedLengths, len(b), want)
 	}
 
-	f := gao.PrimeField()
-	out := make(Codeword, gao.N())
+	f := bc.code.PrimeField()
+	out := make(Codeword, bc.code.N())
 
 	for i := range out {
 		var buf [8]byte
@@ -151,8 +160,8 @@ func (gao *Code) unmarshal(b []byte) (Codeword, error) {
 
 // erasedSymbols maps lost byte ranges onto the symbol indices they cover, sorted and
 // without repeats. Malformed ranges are skipped rather than reported as erasures.
-func (gao *Code) erasedSymbols(lost []ByteRange) []int {
-	symbolRanges := gao.symbolRangesOf(lost)
+func (bc *ByteCode) erasedSymbols(lost []ByteRange) []int {
+	symbolRanges := bc.symbolRangesOf(lost)
 	mergedRanges := mergeRanges(symbolRanges)
 	return symbolRanges2Indices(mergedRanges)
 }
@@ -164,11 +173,11 @@ type symbolRange struct {
 
 // symbolRangesOf converts byte ranges to the symbol ranges they cover, dropping those
 // that fall outside the codeword.
-func (gao *Code) symbolRangesOf(lost []ByteRange) []symbolRange {
+func (bc *ByteCode) symbolRangesOf(lost []ByteRange) []symbolRange {
 	out := make([]symbolRange, 0, len(lost))
 
 	for _, r := range lost {
-		if sr, ok := gao.byteRange2symbolRange(r); ok {
+		if sr, ok := bc.byteRange2symbolRange(r); ok {
 			out = append(out, sr)
 		}
 	}
@@ -230,9 +239,9 @@ func symbolRanges2Indices(rs []symbolRange) []int {
 
 // byteRange2symbolRange returns the symbols a lost byte range covers.
 // Ranges reaching outside the codeword are clipped, and ones falling wholly outside report ok false.
-func (gao *Code) byteRange2symbolRange(r ByteRange) (symbolRange, bool) {
-	w := gao.encodedSymbolSize()
-	wire := gao.N() * w
+func (bc *ByteCode) byteRange2symbolRange(r ByteRange) (symbolRange, bool) {
+	w := bc.encodedSymbolSize()
+	wire := bc.code.N() * w
 
 	off, length := r.Off, r.Len
 	if off < 0 {
