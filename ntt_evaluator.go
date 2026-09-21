@@ -15,8 +15,10 @@ import (
 // theoretic transform, which is quasi-linear rather than the quadratic pointwise
 // evaluation of slowEvaluator.
 //
-// It requires n to be a power of two dividing p-1. NewCode checks this and
-// reports ErrUnsupportedSize rather than letting the evaluator fail later.
+// It needs two transforms from the field, an n-point one to evaluate with and a
+// 2n-point one to decode with, so n must be a power of two and 2n must divide p-1.
+// newNttEvaluator checks both, and NewCode turns a failure into a fallback or
+// ErrUnsupportedSize rather than letting the evaluator fail later.
 type nttEvaluator struct {
 	pr *field.PolyRing // safe for concurrent use.
 	n  int
@@ -24,8 +26,9 @@ type nttEvaluator struct {
 }
 
 // newNttEvaluator builds the evaluator for codeword length n, or reports why the field
-// admits no NTT usable at that length. The points are the n-th roots of unity, which
-// cost a transform to derive, so they are derived here rather than per call.
+// admits no NTT usable at that length: nttSupportsSize below requires both the n-point
+// and the 2n-point transform. The points are the n-th roots of unity, which cost a
+// transform to derive, so they are derived here rather than per call.
 func newNttEvaluator(pr *field.PolyRing, n int) (*nttEvaluator, error) {
 	if err := nttSupportsSize(pr.GetField(), n); err != nil {
 		return nil, err
@@ -43,9 +46,11 @@ func newNttEvaluator(pr *field.PolyRing, n int) (*nttEvaluator, error) {
 	return &nttEvaluator{pr: pr, n: n, xs: p.NoCopySlice()}, nil
 }
 
-// supportsSize reports whether the field admits the transforms this strategy needs: an
-// n-point one to evaluate with, and a 2n-point one to decode with. Both require a power
-// of two of at least 2 dividing p-1, so in practice the second is the binding one.
+var errNTooSmallForNTT = errors.New("the NTT needs a codeword length of at least 2")
+
+// nttSupportsSize reports whether the field admits the transforms this strategy needs:
+// an n-point one to evaluate with, and a 2n-point one to decode with. Both require a
+// power of two of at least 2 dividing p-1, so in practice the second is the binding one.
 //
 // The 2n is not a margin. The decoder's partial GCD multiplies polynomials of degree up
 // to n, and the longest convolution that asks for measures 1.25n, which rounds up to a
@@ -53,10 +58,8 @@ func newNttEvaluator(pr *field.PolyRing, n int) (*nttEvaluator, error) {
 // multiplies in schoolbook inside a recursion built to avoid it, which measures slower
 // than never taking that recursion at all -- so it does not count as support.
 //
-// NewCode calls this, so an n the strategy cannot serve surfaces as a fallback or an
-// error rather than as a panic from inside Encode.
-var errNTooSmallForNTT = errors.New("the NTT needs a codeword length of at least 2")
-
+// newNttEvaluator calls this, so an n the strategy cannot serve surfaces as a fallback
+// or an error rather than as a panic from inside Encode.
 func nttSupportsSize(fld field.Field, n int) error {
 	if n <= 0 {
 		return errNonPositiveN
