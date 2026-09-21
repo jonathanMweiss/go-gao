@@ -87,6 +87,7 @@ import (
 )
 
 func main() {
+	// can use some other prime.
 	f, _ := field.NewPrimeField(field.NTTFriendlyPrime)
 
 	const n, k = 16, 4
@@ -106,7 +107,7 @@ func main() {
 ```
 
 A symbol is a field element, so every value must be below the modulus.
-[`field.NTTFriendlyPrime`](./field) is a default sized for both things a codeword needs:
+If you are not sure what size to pick; [`field.NTTFriendlyPrime`](./field) is a default sized for both things a codeword needs:
 57 bits, so seven whole bytes fit in a symbol, and $2^{32}$ divides $p-1$, so transforms
 run to $2^{32}$ points.
 
@@ -147,13 +148,12 @@ for _, word := range words {
 ```
 
 That is the shape of a node or a disk going down: every codeword striped across it loses
-the same index. Sharing the set is worth about **1.3x** on a batch — decoding 64 words at
-`n=8192, k=4096` takes 100.8 ms with one set against 128.6 ms with one per word.
+the same index. Sharing the set saves compute time.
 
 A set suits any code built with the same modulus, `n`, `k` and strategy, so the two ends
 of a link can each build their own code and still share one.
 
-If you received only some of the symbols — a k-of-n fetch, say — place what you have
+If you received only some of the symbols (a k-of-n fetch) place what you have
 and name the rest:
 
 ```go
@@ -202,17 +202,14 @@ times 8).
 is indistinguishable from payload afterwards, so keep the original length and slice the
 result.
 
-Byte ranges known to be lost (a dropped packet, a bad sector) are named as erasures,
-which cost half as much of the budget as an undeclared corruption. A symbol any range
-touches is erased whole, and ranges may overlap or repeat:
+Byte ranges known to be lost (a dropped packet, a bad sector) are named as erasures. 
+A symbol any range touches is erased whole, and ranges may overlap or repeat:
 
 ```go
-lost, err := bc.Erasures(gao.ByteRange{Off: 24, Len: 16})
+lost, err := bc.Erasures(gao.ByteRange{Off: 24, Len: 4}
+						gao.ByteRange{Off: 23, Len: 5})
 got, err := bc.Decode(raw, lost)
 ```
-
-The set is the same type either way, so a batch sharing a loss pattern reuses it as
-above.
 
 ### Too many errors
 
