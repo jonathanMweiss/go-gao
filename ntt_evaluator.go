@@ -4,9 +4,9 @@
 package gao
 
 import (
+	"errors"
 	"fmt"
 	"slices"
-	"sync"
 
 	"github.com/jonathanmweiss/go-gao/field"
 )
@@ -20,14 +20,27 @@ import (
 type nttEvaluator struct {
 	pr *field.PolyRing // safe for concurrent use.
 	n  int
-
-	// xs is derived on first use and never rewritten; once guards that one write.
-	once sync.Once
-	xs   []uint64
+	xs []uint64 // the n-th roots of unity, read-only after construction.
 }
 
-func newNttEvaluator(pr *field.PolyRing, n int) *nttEvaluator {
-	return &nttEvaluator{pr: pr, n: n}
+// newNttEvaluator builds the evaluator for codeword length n, or reports why the field
+// admits no NTT usable at that length. The points are the n-th roots of unity, which
+// cost a transform to derive, so they are derived here rather than per call.
+func newNttEvaluator(pr *field.PolyRing, n int) (*nttEvaluator, error) {
+	if err := nttSupportsSize(pr.GetField(), n); err != nil {
+		return nil, err
+	}
+
+	// The roots of unity are the NTT of p(x) = x.
+	inner := make([]uint64, n)
+	inner[1] = 1
+
+	p := pr.NewPolynomial(inner, false)
+	if err := pr.NttForward(p); err != nil {
+		return nil, err
+	}
+
+	return &nttEvaluator{pr: pr, n: n, xs: p.NoCopySlice()}, nil
 }
 
 // supportsSize reports whether the field admits the transforms this strategy needs: an
@@ -42,59 +55,36 @@ func newNttEvaluator(pr *field.PolyRing, n int) *nttEvaluator {
 //
 // NewCode calls this, so an n the strategy cannot serve surfaces as a fallback or an
 // error rather than as a panic from inside Encode.
-func (e *nttEvaluator) supportsSize() error {
-	if e.n <= 0 {
+var errNTooSmallForNTT = errors.New("the NTT needs a codeword length of at least 2")
+
+func nttSupportsSize(fld field.Field, n int) error {
+	if n <= 0 {
 		return errNonPositiveN
 	}
 
-	fld := e.pr.GetField()
+	// The roots are derived by planting one at coefficient 1, which n=1 has no room
+	// for. A one-symbol codeword carries no redundancy in any case.
+	if n == 1 {
+		return errNTooSmallForNTT
+	}
 
-	if _, err := field.RootOfUnity(fld, uint64(e.n)); err != nil {
+	if _, err := field.RootOfUnity(fld, uint64(n)); err != nil {
 		return err
 	}
 
-	if _, err := field.RootOfUnity(fld, uint64(2*e.n)); err != nil {
+	if _, err := field.RootOfUnity(fld, uint64(2*n)); err != nil {
 		return fmt.Errorf("decoding needs a 2n-point transform, and 2n=%d does not divide p-1=%d: %w",
-			2*e.n, fld.Modulus()-1, err)
+			2*n, fld.Modulus()-1, err)
 	}
 
 	return nil
 }
 
 // EvaluationPoints returns the n-th roots of unity used as evaluation points.
-// Each call returns a fresh slice, cloned from the cached one, so the caller may modify
-// it freely.
-//
-// It panics if the field does not admit an NTT of length n. Construct the code through
-// NewCode, which rejects such an n with ErrUnsupportedSize.
+// Each call returns a fresh slice, cloned from the evaluator's own, so the caller may
+// modify it freely.
 func (e *nttEvaluator) EvaluationPoints() []uint64 {
-	return slices.Clone(e.points())
-}
-
-// points returns the shared roots of unity, which callers must not modify. Deriving
-// them is a full transform, so they are derived once.
-//
-// The size check sits outside the once, so an evaluator built with an n this field
-// cannot serve panics on every call rather than yielding nil after the first.
-func (e *nttEvaluator) points() []uint64 {
-	if err := e.supportsSize(); err != nil {
-		panic(fmt.Sprintf("gao: nttEvaluator cannot evaluate at %d points: %v", e.n, err))
-	}
-
-	e.once.Do(func() {
-		// The roots of unity are the NTT of p(x) = x.
-		inner := make([]uint64, e.n)
-		inner[1] = 1
-		p := e.pr.NewPolynomial(inner, false)
-
-		if err := e.pr.NttForward(p); err != nil {
-			panic(fmt.Sprintf("gao: NTT of length %d failed: %v", e.n, err))
-		}
-
-		e.xs = p.NoCopySlice()
-	})
-
-	return e.xs
+	return slices.Clone(e.xs)
 }
 
 func (e *nttEvaluator) PrimeField() field.Field {

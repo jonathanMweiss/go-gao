@@ -4,7 +4,6 @@
 package gao
 
 import (
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,64 +12,47 @@ import (
 	"github.com/jonathanmweiss/go-gao/field"
 )
 
-// TestEvaluationPointsAreDerivedOnce pins the memo: every call hands back the same
-// slice, so an nttEvaluator runs its transform once rather than per call.
-func TestEvaluationPointsAreDerivedOnce(t *testing.T) {
+// TestEvaluatorsRejectUnusableSizes pins where a bad n is caught: the constructor
+// derives the points, so it has to report the sizes it cannot serve rather than
+// panicking once someone asks for them.
+func TestEvaluatorsRejectUnusableSizes(t *testing.T) {
+	pr := field.NewPolyRing(newfield(t, 65537))
+
+	for _, n := range []int{0, -1, 1} {
+		_, err := newNttEvaluator(pr, n)
+		assert.Error(t, err, "ntt n=%d", n)
+	}
+
+	// 65537-1 is 2^16, so transforms stop at 65536 and decoding needs 2n.
+	_, err := newNttEvaluator(pr, 65536)
+	assert.Error(t, err, "n beyond the 2n-point transform")
+
+	for _, n := range []int{0, -1, 65537, 70000} {
+		_, err := newSlowEvaluator(pr, n)
+		assert.Error(t, err, "pointwise n=%d", n)
+	}
+}
+
+// TestEvaluationPointsReturnsIndependentSlices pins that callers cannot reach the
+// evaluator's own points, which are shared by every goroutine using the Code.
+func TestEvaluationPointsReturnsIndependentSlices(t *testing.T) {
 	const n = 32
 
 	pr := field.NewPolyRing(newfield(t, field.NTTFriendlyPrime))
 
-	ntt := newNttEvaluator(pr, n)
-	assert.Same(t, &ntt.points()[0], &ntt.points()[0])
+	ntt, err := newNttEvaluator(pr, n)
+	require.NoError(t, err)
 
-	slow := newSlowEvaluator(pr, n)
-	assert.Same(t, &slow.points()[0], &slow.points()[0])
+	slow, err := newSlowEvaluator(pr, n)
+	require.NoError(t, err)
 
-	// EvaluationPoints hands out a copy, so a caller cannot reach the shared slice.
-	xs := ntt.EvaluationPoints()
-	xs[0] = 12345
-	assert.NotEqual(t, xs, ntt.EvaluationPoints())
-}
-
-// TestEvaluationPointsAreConcurrencySafe derives the points from many goroutines at
-// once, which is the case a Code shared across goroutines can reach. Run under -race.
-func TestEvaluationPointsAreConcurrencySafe(t *testing.T) {
-	const n = 64
-
-	pr := field.NewPolyRing(newfield(t, field.NTTFriendlyPrime))
-
-	for name, e := range map[string]evaluationMap{
-		"ntt":       newNttEvaluator(pr, n),
-		"pointwise": newSlowEvaluator(pr, n),
-	} {
+	for name, e := range map[string]evaluationMap{"ntt": ntt, "pointwise": slow} {
 		t.Run(name, func(t *testing.T) {
-			var (
-				wg  sync.WaitGroup
-				mu  sync.Mutex
-				got [][]uint64
-			)
+			xs := e.EvaluationPoints()
+			require.Len(t, xs, n)
 
-			for range 16 {
-				wg.Add(1)
-
-				go func() {
-					defer wg.Done()
-
-					xs := e.EvaluationPoints()
-
-					mu.Lock()
-					defer mu.Unlock()
-
-					got = append(got, xs)
-				}()
-			}
-
-			wg.Wait()
-			require.Len(t, got, 16)
-
-			for _, xs := range got {
-				assert.Equal(t, got[0], xs)
-			}
+			xs[0] = 12345
+			assert.NotEqual(t, xs, e.EvaluationPoints())
 		})
 	}
 }

@@ -190,31 +190,22 @@ func NewCode(f field.Field, n, k int, opts ...Option) (*Code, error) {
 
 // selectEvaluator resolves the strategy, preferring the NTT unless told otherwise.
 func selectEvaluator(pr *field.PolyRing, n int, cfg config) (evaluationMap, error) {
-	slow := newSlowEvaluator(pr, n)
-
-	if cfg.forceSlow {
-		if err := slow.supportsSize(); err != nil {
-			return nil, fmt.Errorf("%w: n=%d: %w", ErrUnsupportedSize, n, err)
+	if !cfg.forceSlow {
+		ntt, nttErr := newNttEvaluator(pr, n)
+		if nttErr == nil {
+			return ntt, nil
 		}
 
-		return slow, nil
+		if cfg.requireNTT {
+			return nil, fmt.Errorf(
+				"%w: n=%d: RequireNTT was set but this field admits no NTT usable at that length "+
+					"(n and 2n must both be powers of two dividing p-1, p=%d): %w",
+				ErrUnsupportedSize, n, pr.GetField().Modulus(), nttErr)
+		}
 	}
 
-	ntt := newNttEvaluator(pr, n)
-
-	nttErr := ntt.supportsSize()
-	if nttErr == nil {
-		return ntt, nil
-	}
-
-	if cfg.requireNTT {
-		return nil, fmt.Errorf(
-			"%w: n=%d: RequireNTT was set but this field admits no NTT usable at that length "+
-				"(n and 2n must both be powers of two dividing p-1, p=%d): %w",
-			ErrUnsupportedSize, n, pr.GetField().Modulus(), nttErr)
-	}
-
-	if err := slow.supportsSize(); err != nil {
+	slow, err := newSlowEvaluator(pr, n)
+	if err != nil {
 		return nil, fmt.Errorf("%w: n=%d: %w", ErrUnsupportedSize, n, err)
 	}
 
