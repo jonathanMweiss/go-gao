@@ -27,8 +27,7 @@ type Code struct {
 	k         int
 	maxErrors int
 
-	pr           *field.PolyRing
-	interpolator *field.Interpolator
+	pr *field.PolyRing
 	// g0 polynomial from the Gao code.
 	// with fast EvaluationMaps like NTT, this polynomial can be used to do fast division.
 	g0 *field.Polynomial
@@ -181,10 +180,9 @@ func NewCode(f field.Field, n, k int, opts ...Option) (*Code, error) {
 		maxErrors: (n - k) / 2,
 		pr:        pr,
 		// g0(x) = (x - x_1)(x - x_2)...(x - x_n)
-		g0:           eval.GenerateLocatorPolynomial(),
-		xs:           eval.EvaluationPoints(),
-		interpolator: field.NewInterpolator(pr),
-		stopDegree:   (n + k) / 2,
+		g0:         eval.GenerateLocatorPolynomial(),
+		xs:         eval.EvaluationPoints(),
+		stopDegree: (n + k) / 2,
 	}, nil
 }
 
@@ -253,17 +251,7 @@ func (gao *Code) Decode(ys Codeword, erasures ErasureSet) ([]uint64, error) {
 		return make([]uint64, gao.K()), nil
 	}
 
-	var (
-		f, r *field.Polynomial
-		err  error
-	)
-
-	if gao.eval.isNTT() {
-		f, r, err = gao.decodeNTT(work, erasures)
-	} else {
-		f, r, err = gao.decodeGeneric(work, erasures)
-	}
-
+	f, r, err := gao.decode(work, erasures)
 	if err != nil {
 		return nil, err
 	}
@@ -327,11 +315,12 @@ func (gao *Code) reduceSlice(ys []uint64) {
 }
 
 // full intuitive explanation in README.md
-func (gao *Code) decodeGeneric(ys []uint64, erasures ErasureSet) (*field.Polynomial, *field.Polynomial, error) {
+func (gao *Code) decode(ys []uint64, erasures ErasureSet) (*field.Polynomial, *field.Polynomial, error) {
 	stopDegree := gao.stopDegree
 
 	if !erasures.empty() {
-		// scale ys by S(xi). interpolating the scaled values yields g1*S mod g0 (see README.md for reason).
+		// scale ys by S(xi): interpolating the scaled values yields g1*S mod g0 (see
+		// README.md for reason).
 		fld := gao.pr.GetField()
 		for i := range ys {
 			ys[i] = fld.Mul(ys[i], erasures.sVals[i])
@@ -340,45 +329,9 @@ func (gao *Code) decodeGeneric(ys []uint64, erasures ErasureSet) (*field.Polynom
 		stopDegree = erasures.stopDegree
 	}
 
-	g1, err := gao.interpolator.Interpolate(gao.xs, ys)
+	// ys is the decoder's own scratch, so Interpolate is free to keep it.
+	g1, err := gao.eval.Interpolate(ys)
 	if err != nil {
-		return nil, nil, err
-	}
-
-	// Optimistic error-free path:
-	// When g_1 has degree < K, it'll be the first polynomial in the Euclidean
-	// remainder sequence below stopDegree, so PartialGCD would
-	// thus, GCD returns g=g1, v=1 with r=0.
-	// Since the return value `f` is defined f=g1/v (and in this case v=1), we return g1 directly.
-	// This is true only when there are no erasures.
-	if erasures.empty() && g1.Degree() < gao.K() {
-		f, r := gao.codewordMessage(g1)
-		return f, r, nil
-	}
-
-	if f, r, ok := gao.erasureOnlyMessage(g1, erasures); ok {
-		return f, r, nil
-	}
-
-	return gao.recoverMessage(g1, erasures, stopDegree)
-}
-
-func (gao *Code) decodeNTT(ys []uint64, erasures ErasureSet) (*field.Polynomial, *field.Polynomial, error) {
-	stopDegree := gao.stopDegree
-
-	if !erasures.empty() {
-		// (see README.md for reason)
-		// scale ys by S(xi): the inverse NTT below then yields (g1*S mod g0).
-		fld := gao.pr.GetField()
-		for i := range ys {
-			ys[i] = fld.Mul(ys[i], erasures.sVals[i])
-		}
-
-		stopDegree = erasures.stopDegree
-	}
-
-	g1 := gao.pr.NewPolynomial(ys, true)
-	if err := gao.pr.NttBackward(g1); err != nil {
 		return nil, nil, err
 	}
 

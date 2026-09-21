@@ -106,6 +106,17 @@ func (e *nttEvaluator) EvaluateCoeffs(coeffs []uint64) ([]uint64, error) {
 	return work.NoCopySlice(), nil
 }
 
+// Interpolate recovers the polynomial from its values with the inverse transform, which
+// works in place: ys becomes the polynomial's own coefficients.
+func (e *nttEvaluator) Interpolate(ys []uint64) (*field.Polynomial, error) {
+	p := e.pr.NewPolynomial(ys, true)
+	if err := e.pr.NttBackward(p); err != nil {
+		return nil, err
+	}
+
+	return p, nil
+}
+
 func (e *nttEvaluator) GenerateLocatorPolynomial() *field.Polynomial {
 	// The locator polynomial L(x) = (x - x_1)(x - x_2)...(x - x_n)
 	// where x_1, x_2, ..., x_n are the n-th roots of unity

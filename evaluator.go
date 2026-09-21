@@ -28,6 +28,14 @@ type evaluationMap interface {
 	// values, and is read, never written, so a caller may keep it.
 	EvaluateCoeffs(coeffs []uint64) (ys []uint64, err error)
 
+	// Interpolate is the inverse: it returns the polynomial taking these n values at
+	// the n evaluation points.
+	//
+	// Unlike EvaluateCoeffs it takes ownership of ys, which it may modify or keep, so
+	// a caller passes a slice of its own. The decoder's is scratch it has finished
+	// with, and sparing it a copy of the whole codeword is worth the asymmetry.
+	Interpolate(ys []uint64) (p *field.Polynomial, err error)
+
 	// The locator polynomial for the evaluation points.
 	// Namely, given the evaluation points x_1, ..., x_n, the locator polynomial is
 	// L(x) = (x - x_1)(x - x_2)...(x - x_n)
@@ -52,9 +60,10 @@ var errNonPositiveN = errors.New("codeword length `n` must be positive")
 // An evaluator is built complete and never written to afterwards, and the ring it
 // borrows is safe for concurrent use, so an evaluator is too.
 type slowEvaluator struct {
-	pr *field.PolyRing
-	n  int
-	xs []uint64 // the evaluation points, read-only after construction.
+	pr           *field.PolyRing
+	interpolator *field.Interpolator
+	n            int
+	xs           []uint64 // the evaluation points, read-only after construction.
 }
 
 // newSlowEvaluator builds the evaluator for codeword length n, or reports why the field
@@ -73,7 +82,12 @@ func newSlowEvaluator(pr *field.PolyRing, n int) (*slowEvaluator, error) {
 		xs[i] = uint64(i + 1)
 	}
 
-	return &slowEvaluator{pr: pr, n: n, xs: xs}, nil
+	return &slowEvaluator{
+		pr:           pr,
+		interpolator: field.NewInterpolator(pr),
+		n:            n,
+		xs:           xs,
+	}, nil
 }
 
 // EvaluationPoints returns the points 1, 2, ..., n used to evaluate a codeword.
@@ -99,6 +113,12 @@ func (e *slowEvaluator) EvaluateCoeffs(coeffs []uint64) ([]uint64, error) {
 	}
 
 	return values, nil
+}
+
+// Interpolate recovers the polynomial from its values by Lagrange interpolation. It
+// happens to leave ys alone, but callers may not rely on that.
+func (e *slowEvaluator) Interpolate(ys []uint64) (*field.Polynomial, error) {
+	return e.interpolator.Interpolate(e.xs, ys)
 }
 
 func (e *slowEvaluator) GenerateLocatorPolynomial() *field.Polynomial {
