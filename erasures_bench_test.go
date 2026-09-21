@@ -74,13 +74,13 @@ func damagedWords(b *testing.B, code *Code, erased []int, count int) []Codeword 
 	b.Helper()
 
 	rng := rand.New(rand.NewSource(1))
-	mod := code.PrimeField().Modulus()
+	f := code.PrimeField()
 	out := make([]Codeword, count)
 
 	for w := range out {
 		msg := make([]uint64, code.K())
 		for i := range msg {
-			msg[i] = rng.Uint64() % mod
+			msg[i] = f.Reduce(rng.Uint64())
 		}
 
 		word, err := code.Encode(msg)
@@ -89,7 +89,7 @@ func damagedWords(b *testing.B, code *Code, erased []int, count int) []Codeword 
 		}
 
 		for _, i := range erased {
-			word[i] = rng.Uint64() % mod
+			word[i] = differentElement(f, rng, word[i])
 		}
 
 		out[w] = word
