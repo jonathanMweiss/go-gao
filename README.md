@@ -25,7 +25,7 @@ cryptography-heavy research, including secret sharing, but it is not
 hardened against side-channel or adversarial-input attacks out of the box:
 audit it for your threat model before relying on it in production.
 
-> **Status: v0.1.** The API may still change. Pin a version.
+> **Status: v0.2.** The API may still change. Pin a version.
 
 ## Where this is useful
 
