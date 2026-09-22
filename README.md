@@ -21,7 +21,7 @@ Additionally, this repo expose the [`field`](./field) package; it is the underly
 
 **No warranty of cryptographic hardness.** The arithmetic is not constant-time,
 and a decoded message is not authenticated. This library is used in
-cryptography-heavy research, including secret sharing, but it is not
+cryptography-heavy research, but it is not
 hardened against side-channel or adversarial-input attacks out of the box:
 audit it for your threat model before relying on it in production.
 
